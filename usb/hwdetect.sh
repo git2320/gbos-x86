@@ -137,6 +137,7 @@ gbos_hw_report() {
   {
     echo "== kernel"; uname -a
     echo "== cpu"; grep -m1 'model name' /proc/cpuinfo; for f in avx avx2 fma bmi2 sha_ni gfni avx_vnni avx512f; do grep -m1 -qw $f /proc/cpuinfo && echo "$f yes" || echo "$f NO"; done
+    grep -qw noisaemu /proc/cmdline && echo "isa_emu: disabled (noisaemu)" || echo "isa_emu: enabled (AVX2/BMI/LZCNT/MOVBE emulated when missing)"
     echo "== dmi"; for f in sys_vendor product_name product_version bios_version board_name; do echo "$f=$(cat /sys/class/dmi/id/$f 2>/dev/null)"; done
     echo "== pci devices without a driver (slot class vendor:device)"
     for d in /sys/bus/pci/devices/*; do

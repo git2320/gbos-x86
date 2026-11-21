@@ -56,11 +56,18 @@ if [ -f "tools/detect_hardware.sh" ]; then
   detect_host_hardware
 fi
 
-# Pre-flight CPU architecture compatibility check
+# Pre-flight CPU architecture note. AVX2 is emulated by the kernel's ISA emulator on
+# CPUs that have AVX but no AVX2 (Sandy/Ivy Bridge), so this is informational only.
 if [ "${DETECTED_CPU_AVX2:-1}" = 0 ]; then
-  printf '\n\033[1;33m[!] WARNING: Host CPU (%s) lacks AVX2 instruction support.\033[0m\n' "${DETECTED_CPU_NAME:-Unknown}"
-  printf '    Google userspace (AOSP 15/16 linker64/init) strictly requires AVX2 (Haswell 4th Gen / Skylake 6th Gen+ or AMD Zen).\n'
-  printf '    An image built on/for this CPU will trigger SIGILL (exitcode 4) during init boot.\n\n'
+  if [ "${DETECTED_CPU_AVX:-0}" = 1 ]; then
+    printf '\n\033[1;33m[!] NOTE: Host CPU (%s) has AVX but no AVX2 (Sandy/Ivy Bridge class).\033[0m\n' "${DETECTED_CPU_NAME:-Unknown}"
+    printf '    The kernel ISA emulator handles AVX2/BMI/LZCNT instructions in the #UD handler, so gbOS86 boots.\n'
+    printf '    Expect slower userspace (instruction emulation) and software GPU rendering on Gen6/7 i915.\n\n'
+  else
+    printf '\n\033[1;33m[!] WARNING: Host CPU (%s) has no AVX.\033[0m\n' "${DETECTED_CPU_NAME:-Unknown}"
+    printf '    Google userspace (AOSP 15/16 linker64/init) uses AVX from its first instructions, and there is\n'
+    printf '    no YMM state in XSAVE for the emulator to use. Such CPUs cannot boot gbOS86.\n\n'
+  fi
 fi
 
 # Resolve build type when --auto is passed without explicit type
@@ -84,7 +91,7 @@ if [ -z "$BUILD_TYPE" ]; then
     if [ "$DETECTED_CPU_AVX2" = 1 ]; then
       printf '  CPU Features:  AVX=yes, AVX2=yes (Compatible with gbOS86)\n'
     elif [ "$DETECTED_CPU_AVX" = 1 ]; then
-      printf '  CPU Features:  AVX=yes, AVX2=NO [WARNING: AVX2 missing; init will panic]\n'
+      printf '  CPU Features:  AVX=yes, AVX2=NO [OK: AVX2 emulated by kernel, slower]\n'
     else
       printf '  CPU Features:  AVX=NO,  AVX2=NO [WARNING: Legacy CPU; init cannot boot]\n'
     fi

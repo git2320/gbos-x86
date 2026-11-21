@@ -27,6 +27,8 @@ OVERRIDES = {
     'BLK_DEV_NVME': 'y', 'NVME_CORE': 'y', 'SATA_AHCI': 'y', 'ATA': 'y',
     'SCSI': 'y', 'BLK_DEV_SD': 'y',
     'USB_XHCI_HCD': 'y', 'USB_XHCI_PCI': 'y', 'USB_STORAGE': 'y', 'USB_UAS': 'y',
+    # Pre-2015 laptops (Sandy/Ivy Bridge) have EHCI/OHCI for their USB 2.0 ports; XHCI only covers USB 3.
+    'USB_EHCI_HCD': 'y', 'USB_EHCI_PCI': 'y', 'USB_OHCI_HCD': 'y', 'USB_OHCI_HCD_PCI': 'y',
     'HID_GENERIC': 'y', 'USB_HID': 'y', 'HID_MULTITOUCH': 'y',
     'I2C_HID': 'y', 'I2C_HID_ACPI': 'y', 'I2C_DESIGNWARE_CORE': 'y', 'I2C_DESIGNWARE_PLATFORM': 'y',
     'PINCTRL_CANNONLAKE': 'y', 'KEYBOARD_ATKBD': 'y', 'MOUSE_PS2': 'y',

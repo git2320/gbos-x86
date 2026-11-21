@@ -341,7 +341,7 @@ print_hardware_report() {
   if [ "$DETECTED_CPU_AVX2" = 1 ]; then
     printf '  CPU Features:  AVX=yes, AVX2=yes (Fully compatible with gbOS86)\n'
   elif [ "$DETECTED_CPU_AVX" = 1 ]; then
-    printf '  CPU Features:  AVX=yes, AVX2=NO [WARNING: AVX2 missing; AOSP init will SIGILL]\n'
+    printf '  CPU Features:  AVX=yes, AVX2=NO [OK: AVX2 emulated by kernel; slower]\n'
   else
     printf '  CPU Features:  AVX=NO,  AVX2=NO [WARNING: Incompatible legacy CPU]\n'
   fi

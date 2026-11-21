@@ -203,6 +203,13 @@ To try a driver option on your own laptop, put e.g. `MODOPTS="xe.enable_panel_re
 
 The kernel (#31) builds drivers for most Intel-era laptops as **modules**, and boot detects what is present:
 
+**2nd/3rd Gen Intel (Sandy Bridge, Ivy Bridge).** These CPUs have AVX but not AVX2; Google's userspace is built for the
+Haswell baseline and would die in `linker64` with SIGILL. The kernel ISA emulator now decodes and executes AVX2 vector
+instructions (broadcasts, logical/integer ops, shifts, shuffles, `vpmovmsk`, `vpmovsx/zx`, `vpermq`) and the Haswell-baseline
+GPR instructions (BMI1/2, LZCNT/TZCNT, MOVBE) in the `#UD` handler, on the saved XSAVE state. `hook.sh` no longer stops such
+CPUs. Graphics still needs the legacy i915 Gen6/7 path (SwiftShader software rendering, see below), and the older CPUs feel
+slow because hot bionic code is emulated. A CPU with **no AVX** is still unsupported.
+
 1. `usb/hwdetect.sh` (called by `hook.sh`) bind-mounts the stick's full module tree (`gbos/modules/`, depmod'ed for
    the running kernel) over `/lib/modules`, then does a udev-style *coldplug*: it reads every device's sysfs `modalias`
    and `modprobe -a`'s them, repeating until no new module loads (a loaded driver creates new devices).
@@ -213,7 +220,7 @@ The kernel (#31) builds drivers for most Intel-era laptops as **modules**, and b
 
 | Area | Covered |
 |---|---|
-| CPU | Anything the ISA-emulation kernel handles: 4th gen (Haswell) and newer **with AVX2** (CPUs lacking AVX2, such as Celeron/Pentium/Atom or Sandy/Ivy Bridge, halt at boot with a clear message, as AOSP's dynamic linker executes AVX2 instructions); the Googlebook OS needs instructions older CPUs lack, so it is emulated (slow on pre-2021 CPUs) |
+| CPU | Intel **2nd Gen (Sandy Bridge) and newer with AVX**. AVX2 (`vpbroadcastb` and friends), BMI1/2, LZCNT/TZCNT and MOVBE are emulated in the kernel's `#UD` handler on CPUs that lack them, so Sandy/Ivy Bridge laptops boot; emulation makes userspace slow. CPUs with no AVX at all (many Celeron/Pentium/Atom parts) still cannot boot: there is no YMM state in XSAVE for the emulator to use |
 | Graphics / display / brightness | `i915` (Gen9 to Raptor Lake) + ACPI video/backlight; `xe` for newer parts (needs its own firmware, in firmware release v35; the colour/gamma fixes are i915-only). **AMD Radeon (`amdgpu`): experimental, software rendering only** (CPU-drawn, slow; see below; **untested on hardware**) |
 | Wi-Fi | Intel (`iwldvm`: 7260/7265, `iwlmvm`: 8265 to AX211/BE200), Realtek rtw88/rtw89, MediaTek mt7921/7922/7925, Qualcomm ath10k/ath11k, Broadcom brcmfmac |
 | Bluetooth | `btusb` with Intel/Realtek/MediaTek/Qualcomm/Broadcom, Intel PCIe BT |

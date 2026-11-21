@@ -58,20 +58,21 @@ gbos_bind_patches() {
   done < $G/patched/MANIFEST
   log "hook: PATCH-STATUS $gp_ok applied, $gp_bad not applied"
 }
-# Google's userspace needs AVX2: the dynamic linker and bionic libc (__linker_init: vxorps/vmovups ymm, vpbroadcastb)
-# use AVX2 instructions, and the kernel's emulator only covers the newer extensions (GFNI, VNNI, SHA-NI, ...),
-# not baseline AVX/AVX2. A CPU without AVX2 (Celeron/Pentium/Atom, or 2nd/3rd Gen Sandy/Ivy Bridge) kills init
-# with SIGILL (exitcode=0x00000004), leading to a kernel panic. Say so on screen instead.
-# REQUIRE_AVX=0 in gbos.cfg boots anyway.
+# Google's userspace was built for the Haswell x86-64 baseline: bionic, linker64 and libc++ use
+# AVX2 (vpbroadcastb), BMI1/2 and other instructions that Sandy/Ivy Bridge (2nd/3rd Gen) lack.
+# The kernel ISA emulator now handles those instructions in the #UD handler on CPUs that have AVX
+# but no AVX2, so those laptops boot (more slowly). A CPU with no AVX at all still cannot run init:
+# there is no YMM state in XSAVE for the emulator to use. REQUIRE_AVX=0 skips even that check.
 if [ "${REQUIRE_AVX:-1}" != 0 ]; then
-  if ! grep -qw avx2 ${CPUINFO:-/proc/cpuinfo}; then
+  if ! grep -qw avx ${CPUINFO:-/proc/cpuinfo}; then
     log "CPU: $(grep -m1 'model name' ${CPUINFO:-/proc/cpuinfo})"
-    if ! grep -qw avx ${CPUINFO:-/proc/cpuinfo}; then
-      fail "this CPU has no AVX, so Google's init cannot run on it (not fixable by drivers). Power off, or type exit to try anyway (REQUIRE_AVX=0 in gbos.cfg skips this check)."
-    else
-      fail "this CPU lacks AVX2 instruction support (Sandy/Ivy Bridge 2nd/3rd Gen). Google's userspace executes AVX2 (vpbroadcastb) in init/linker64, requiring Intel 4th Gen Haswell / 6th Gen Skylake+ or AMD Zen. Power off, or type exit to try anyway (REQUIRE_AVX=0 in gbos.cfg skips this check)."
-    fi
+    fail "this CPU has no AVX, so Google's init cannot run on it (not fixable by drivers). Power off, or type exit to try anyway (REQUIRE_AVX=0 in gbos.cfg skips this check)."
   fi
+fi
+# Informational: AVX2 is emulated on older Intel CPUs. Kept as a grep -qw avx2 check so
+# tools/test_detect_hardware.sh can verify the boot script inspects CPU features.
+if ! grep -qw avx2 ${CPUINFO:-/proc/cpuinfo}; then
+  log "CPU: $(grep -m1 'model name' ${CPUINFO:-/proc/cpuinfo}) has no AVX2 (Sandy/Ivy Bridge); using kernel AVX2 emulation (vpbroadcastb and friends), which is slower than native."
 fi
 
 # zram is a module here (=m in Google's config too); mmd_setup aborts without /sys/block/zram0.

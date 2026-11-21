@@ -538,6 +538,13 @@ void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop 
 {
 	int i, l, n, lane;
 
+	/* A move is a raw vector copy: it needs no element size at all. Handle it
+	 * before the elem guard, which protects the per-element cases below. */
+	if (op == EMU_V_MOV) {
+		memcpy(dst, b, len);
+		return;
+	}
+
 	/* Never divide by a zero element size: a bad decode must not panic the kernel. */
 	if (elem <= 0 || len < 16)
 		return;
@@ -545,10 +552,6 @@ void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop 
 	lane = len / 16;
 
 	switch (op) {
-	case EMU_V_MOV:
-		/* Move is a raw vector copy; elem is irrelevant and may be len-sized. */
-		memcpy(dst, b, len);
-		return;
 	case EMU_V_BROADCAST:
 		/* The source is the r/m operand, which do_emulate() loads into b. */
 		for (i = 0; i < n; i++)

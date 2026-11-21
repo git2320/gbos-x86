@@ -677,8 +677,24 @@ static u64 gpr_ld(const u8 *p, int n)
 
 static void do_gpr(struct gop *g, struct pt_regs *regs, const u8 *mem, void __user *addr)
 {
-	u64 a, r = 0, mask = g->width == 8 ? ~0ULL : 0xffffffffULL;
-	int n = g->width * 8;
+	u64 a, b = 0, r;
+	u32 ctrl = 0;
+	enum emu_grop op;
+
+	switch (g->kind) {
+	case G_ANDN:   op = EMU_G_ANDN;   b = gpr_read(regs, g->src1); break;
+	case G_BEXTR:  op = EMU_G_BEXTR;  ctrl = g->is_imm ? g->imm :
+					(u32)gpr_read(regs, g->src1); break;
+	case G_BLSI:   op = EMU_G_BLSI;   break;
+	case G_BLSMSK: op = EMU_G_BLSMSK; break;
+	case G_BLSR:   op = EMU_G_BLSR;   break;
+	case G_BZHI:   op = EMU_G_BZHI;   ctrl = g->imm; break;
+	case G_RORX:   op = EMU_G_RORX;   ctrl = g->imm; break;
+	case G_LZCNT:  op = EMU_G_LZCNT;  break;
+	case G_TZCNT:  op = EMU_G_TZCNT;  break;
+	case G_MOVBE:  op = EMU_G_MOVBE;  break;
+	default: return;
+	}
 
 	/* MOVBE store: ModRM.reg is the source register, r/m the memory destination. */
 	if (g->store)
@@ -688,60 +704,12 @@ static void do_gpr(struct gop *g, struct pt_regs *regs, const u8 *mem, void __us
 	else
 		a = gpr_read(regs, g->src2);
 
-	switch (g->kind) {
-	case G_ANDN:
-		r = ~a & gpr_read(regs, g->src1);
-		break;
-	case G_BEXTR: {
-		u32 c = g->is_imm ? g->imm : (u32)gpr_read(regs, g->src1);
-		u32 start = c & 0xff, len = (c >> 8) & 0xff;
-		u64 bits = len >= 64 ? ~0ULL : (1ULL << len) - 1;
-
-		r = start >= (u32)n ? 0 : (a >> start) & bits;
-		break;
-	}
-	case G_BLSI:   r = a & -a; break;
-	case G_BLSMSK: r = a ^ (a - 1); break;
-	case G_BLSR:   r = a & (a - 1); break;
-	case G_BZHI: {
-		int hi = g->imm & 31;
-
-		r = a & (hi ? ((1ULL << hi) - 1) : ~0ULL);
-		break;
-	}
-	case G_RORX: {
-		int cnt = g->imm & 63;
-
-		r = cnt ? (a >> cnt) | (a << (64 - cnt)) : a;
-		break;
-	}
-	case G_LZCNT: {
-		u64 v = a & mask;
-
-		while (n && !(v & (1ULL << (n - 1)))) { r++; n--; }
-		break;
-	}
-	case G_TZCNT:
-		if (!a)
-			r = n;
-		else
-			while (!(a & 1)) { r++; a >>= 1; }
-		break;
-	case G_MOVBE: {
-		int i;
-		u8 *p = (u8 *)&r;
-
-		for (i = 0; i < g->width; i++)
-			p[i] = ((const u8 *)&a)[g->width - 1 - i];
-		break;
-	}
-	default: return;
-	}
+	r = emu_grop(op, a, b, ctrl, g->width);
 	if (g->store) {
 		if (copy_to_user(addr, &r, g->width))
 			force_sig_fault(SIGSEGV, SEGV_MAPERR, addr);
 	} else {
-		gpr_write(regs, g->dst, r & mask);
+		gpr_write(regs, g->dst, r);
 	}
 }
 

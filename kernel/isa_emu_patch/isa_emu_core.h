@@ -74,6 +74,16 @@ void emu_vshift_var(u8 *dst, const u8 *a, const u8 *b, int len, int elem, int ki
 /* Sign bits of the elements of a (one bit per element, 32-bit little-endian result in dst). */
 void emu_vmovmsk(u8 *dst, const u8 *a, int len, int elem);
 
+/* ---- Haswell-baseline GPR instructions (pre-Haswell Intel) --------------
+ * `a` is the first source, `b` the second (used by ANDN/BEXTR), `ctrl` the
+ * immediate or BEXTR control word. `width` is 4 or 8; results are masked to it.
+ */
+enum emu_grop {
+	EMU_G_ANDN, EMU_G_BEXTR, EMU_G_BLSI, EMU_G_BLSMSK, EMU_G_BLSR,
+	EMU_G_BZHI, EMU_G_RORX, EMU_G_LZCNT, EMU_G_TZCNT, EMU_G_MOVBE,
+};
+u64 emu_grop(enum emu_grop op, u64 a, u64 b, u32 ctrl, int width);
+
 /* SHA-NI. All operate on 128-bit values; `dst` is also the first source. */
 void emu_sha1rnds4(u8 *dst, const u8 *src, u8 imm);
 void emu_sha1nexte(u8 *dst, const u8 *src);

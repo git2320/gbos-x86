@@ -748,3 +748,69 @@ void emu_vmovmsk(u8 *dst, const u8 *a, int len, int elem)
 {
 	emu_vop(dst, a, a, len, elem, EMU_V_MOVMSK, 0);
 }
+
+/* ---- Haswell-baseline GPR instructions ---------------------------------- */
+u64 emu_grop(enum emu_grop op, u64 a, u64 b, u32 ctrl, int width)
+{
+	u64 r = 0, mask = width == 8 ? ~0ULL : 0xffffffffULL;
+	int n = width * 8, i;
+
+	a &= mask;
+	b &= mask;
+
+	switch (op) {
+	case EMU_G_ANDN:
+		r = ~a & b;
+		break;
+	case EMU_G_BEXTR: {
+		u32 start = ctrl & 0xff, len = (ctrl >> 8) & 0xff;
+		u64 bits = len >= 64 ? ~0ULL : (1ULL << len) - 1;
+
+		r = start >= (u32)n ? 0 : (a >> start) & bits;
+		break;
+	}
+	case EMU_G_BLSI:   r = a & -a; break;
+	case EMU_G_BLSMSK: r = a ^ (a - 1); break;
+	case EMU_G_BLSR:   r = a & (a - 1); break;
+	case EMU_G_BZHI: {
+		int hi = ctrl & (width == 8 ? 63 : 31);
+
+		/* index 0 clears every bit: a & ((1 << 0) - 1) == 0. */
+		r = a & ((1ULL << hi) - 1);
+		break;
+	}
+	case EMU_G_RORX: {
+		int cnt = width == 8 ? (ctrl & 63) : (ctrl & 31);
+
+		if (!cnt)
+			r = a;
+		else if (width == 8)
+			r = (a >> cnt) | (a << (64 - cnt));
+		else {
+			u32 x = (u32)a;
+
+			r = (x >> cnt) | (x << (32 - cnt));
+		}
+		break;
+	}
+	case EMU_G_LZCNT:
+		while (n && !(a & (1ULL << (n - 1)))) { r++; n--; }
+		break;
+	case EMU_G_TZCNT:
+		if (!a)
+			r = n;
+		else
+			while (!(a & 1)) { r++; a >>= 1; }
+		break;
+	case EMU_G_MOVBE: {
+		u8 tmp[8], out[8];
+
+		for (i = 0; i < width; i++)
+			out[i] = ((const u8 *)&a)[width - 1 - i];
+		memcpy(tmp, out, width);
+		memcpy(&r, tmp, width);
+		break;
+	}
+	}
+	return r & mask;
+}

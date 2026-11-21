@@ -48,6 +48,9 @@ jobs:
       - name: Fetch kernel source, AOSP clang and KernelSU (~2.5 GB)
         run: sh kernel/fetch_kernel_sources.sh
 
+      - name: Fetch static busybox for the stage0 initramfs
+        run: sh tools/fetch_busybox.sh
+
       - name: Build the kernel (BOOTX64.EFI + modules)
         run: sh kernel/build_kernel.sh
 

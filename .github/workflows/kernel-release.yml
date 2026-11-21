@@ -39,6 +39,12 @@ jobs:
       - name: Build the kernel build image
         run: docker build -t gbos-kbuild kernel/docker
 
+      - name: Cache downloaded kernel inputs
+        uses: actions/cache@v4
+        with:
+          path: build/dl
+          key: gbos-kernel-inputs-${{ hashFiles('kernel/fetch_kernel_sources.sh') }}
+
       - name: Fetch kernel source, AOSP clang and KernelSU (~2.5 GB)
         run: sh kernel/fetch_kernel_sources.sh
 

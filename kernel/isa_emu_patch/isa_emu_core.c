@@ -486,6 +486,9 @@ static void cvtps2dq(u8 *dst, const u8 *a, int len, int round)
 			u64 sig = e ? (m | 0x800000) : m;
 			int sh = e - 127 - 23;
 
+			if (!e)
+				v = 0;		/* zero or subnormal converts to +0/-0 */
+
 			if (sh >= 32)
 				v = 0x80000000;		/* overflow: indefinite integer */
 			else if (sh >= 0)
@@ -543,8 +546,9 @@ void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop 
 		return;
 	case EMU_V_MOVSX:
 	case EMU_V_MOVZX:
-		/* vpmovsx/zx: the source is xmm (16 bytes) even for a ymm destination. */
-		for (i = 0; i < 16 / aux; i++) {
+		/* vpmovsx/zx: number of output elements is len/elem (e.g. vpmovsxbq writes
+		 * 4 qwords from 4 source bytes, not 16 bytes worth of results). */
+		for (i = 0; i < n; i++) {
 			u64 v = ldN(a + aux * i, aux);
 
 			if (op == EMU_V_MOVSX)
@@ -630,12 +634,17 @@ void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop 
 		for (l = 0; l < lane; l++)
 			for (i = 0; i < cnt; i++) {
 				s64 x = sxN(ldN(a + 16 * l + i * elem, elem), elem);
-				s64 y = sxN(ldN(b + 16 * l + i * elem, elem), elem);
 				u64 lo = x < 0 ? 0 : (u64)x > maskN(out) ? maskN(out) : (u64)x;
+
+				/* All source elements of a come first, then all of b, per lane. */
+				stN(dst + 16 * l + i * out, out, lo);
+			}
+		for (l = 0; l < lane; l++)
+			for (i = 0; i < cnt; i++) {
+				s64 y = sxN(ldN(b + 16 * l + i * elem, elem), elem);
 				u64 hi = y < 0 ? 0 : (u64)y > maskN(out) ? maskN(out) : (u64)y;
 
-				stN(dst + 16 * l + 2 * i * out, out, lo);
-				stN(dst + 16 * l + (2 * i + 1) * out, out, hi);
+				stN(dst + 16 * l + (cnt + i) * out, out, hi);
 			}
 		return;
 	}
@@ -645,13 +654,17 @@ void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop 
 	case EMU_V_SAD:
 		psadbw(dst, a, b, len);
 		return;
-	case EMU_V_BLEND:
+	case EMU_V_BLEND: {
+		int per = 16 / elem;	/* selector bits per 128-bit lane */
+
 		for (i = 0; i < n; i++) {
-			int bit = (aux >> (i % (16 / elem))) & 1;
+			int lane_i = (i * elem) / 16, idx = ((i * elem) % 16) / elem;
+			int bit = (aux >> (lane_i * per + idx)) & 1;
 
 			memcpy(dst + i * elem, (bit ? b : a) + i * elem, elem);
 		}
 		return;
+	}
 	case EMU_V_CVTTPS2DQ:
 	case EMU_V_CVTPS2DQ:
 		cvtps2dq(dst, a, len, op == EMU_V_CVTPS2DQ);
@@ -718,7 +731,7 @@ void emu_vshift_var(u8 *dst, const u8 *a, const u8 *b, int len, int elem, int ki
 		s64 sa = sxN(av, elem);
 		u64 r;
 
-		cnt &= elem == 8 ? 63 : 31;
+		/* AVX2 variable shifts do NOT mask the count: >= width gives zero/sign fill. */
 		if (cnt >= (u64)elem * 8)
 			r = kind == 2 ? (u64)(sa >> (elem * 8 - 1)) : 0;
 		else if (kind == 0)

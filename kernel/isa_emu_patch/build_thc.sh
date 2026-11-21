@@ -5,7 +5,7 @@
 # Output: /build/modroot_thc = stripped, depmod'ed tree with every module; the bzImage differs from #33 only by
 # the embedded config (IKCONFIG) and the build counter.
 set -e
-C=/build/inputs/clang-r584948c
+C=/build/inputs/clang-r584948b
 export PATH=$C/bin:$PATH LD_LIBRARY_PATH=$C/lib:$LD_LIBRARY_PATH
 M="make -C /build/src O=/build/out ARCH=x86_64 LLVM=$C/bin/ CC=$C/bin/clang-22"
 cd /build/out

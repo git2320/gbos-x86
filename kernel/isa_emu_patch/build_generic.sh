@@ -4,7 +4,7 @@
 #   /build/modroot_all   every module (goes to usb/modules/ on the stick, loaded by usb/hwdetect.sh)
 # The stage0 initramfs keeps only the modules it already had (see build_generic_stage2.sh).
 set -e
-C=/build/inputs/clang-r584948c
+C=/build/inputs/clang-r584948b
 export PATH=$C/bin:$PATH LD_LIBRARY_PATH=$C/lib:$LD_LIBRARY_PATH
 M="make -C /build/src O=/build/out ARCH=x86_64 LLVM=$C/bin/ CC=$C/bin/clang-22"
 cd /build/out

@@ -9,6 +9,6 @@ $S -e VT -e VT_CONSOLE -e VT_HW_CONSOLE_BINDING -e FB -e FB_CORE -e FB_EFI -e DR
    -e MAGIC_SYSRQ -e EFI_VARS_PSTORE -e DM_INIT -d FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER
 $S --set-str CMDLINE "${GBOS_CMDLINE}"
 $S --set-str INITRAMFS_SOURCE "${GBOS_INITRAMFS:-}"
-C=/build/inputs/clang-r584948c
+C=/build/inputs/clang-r584948b
 make -C /build/src O=/build/out ARCH=x86_64 LLVM=$C/bin/ CC=$C/bin/clang-22 olddefconfig >/dev/null
 grep -E 'CONFIG_(VT|VT_CONSOLE|FB|FB_EFI|DRM_FBDEV_EMULATION|FRAMEBUFFER_CONSOLE|DRM_PANIC|CMDLINE|INITRAMFS_SOURCE)=' /build/out/.config

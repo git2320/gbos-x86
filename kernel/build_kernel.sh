@@ -26,7 +26,7 @@ set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 JOBS=${2:-$(nproc)}
 VOL=gbos-ksrc
-C=/build/inputs/clang-r584948c
+C=/build/inputs/clang-r584948b
 
 # The base config: the one embedded in the shipped kernel, unless one is given.
 BASE=${1:-}

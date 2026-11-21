@@ -2,7 +2,7 @@
 # Fetch the kernel build inputs into the docker volume "gbos-ksrc":
 #
 #   /build/src                     AOSP kernel/common (android17-6.18) at the pinned commit
-#   /build/inputs/clang-r584948c  AOSP clang prebuilt (the toolchain build_kernel.sh and the patch scripts use)
+#   /build/inputs/clang-r584948b  AOSP clang prebuilt (the toolchain build_kernel.sh and the patch scripts use)
 #   /build/inputs/KernelSU        KernelSU sources (tiann/KernelSU, tag v3.3.1)
 #
 # Everything is skipped when it is already there, so re-running is cheap.
@@ -20,7 +20,7 @@ KSRC_TAR=kernel-common-$KSRC_COMMIT.tar.gz
 # update this value to the sha256 printed in the error. Do not accept a corrupt archive.
 KSRC_SHA=3eb425501acd744021fc0f10552a7b286518190538c4518362279d550a5c6ee7
 CLANG_TAG=android-17.0.0_r1        # AOSP prebuilts/clang/host/linux-x86
-CLANG_DIR=clang-r584948c           # must match C= in kernel/build_kernel.sh and kernel/isa_emu_patch/*.sh
+CLANG_DIR=clang-r584948b           # must match C= in kernel/build_kernel.sh and kernel/isa_emu_patch/*.sh
 KSU_TAG=v3.3.1
 
 DL=$ROOT/build/dl

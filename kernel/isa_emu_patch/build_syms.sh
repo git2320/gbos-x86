@@ -5,7 +5,7 @@
 # Also put the symbols into configure_whl.py GENERIC so a from-scratch build_generic.sh gets them. bzImage is relinked
 # (IKCONFIG embeds the config), but only the new .ko files matter. The previous .config is kept as .config.prev.
 set -e
-C=/build/inputs/clang-r584948c
+C=/build/inputs/clang-r584948b
 export PATH=$C/bin:$PATH LD_LIBRARY_PATH=$C/lib:$LD_LIBRARY_PATH
 M="make -C /build/src O=/build/out ARCH=x86_64 LLVM=$C/bin/ CC=$C/bin/clang-22"
 cd /build/out

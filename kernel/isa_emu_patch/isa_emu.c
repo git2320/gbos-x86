@@ -45,226 +45,18 @@ early_initcall(isa_emu_boot_init);
 
 enum op_kind {
 	K_NONE, K_GF2P8MUL, K_GF2P8AFF, K_GF2P8AFFINV, K_VNNI_BUSD, K_VNNI_WSSD, K_VNNI8,
-	K_IFMA_L, K_IFMA_H, K_VAES, K_CLMUL, K_ZEROUPPER,
+	K_IFMA_L, K_IFMA_H, K_VAES, K_CLMUL,
 	K_SHA1NEXTE, K_SHA1MSG1, K_SHA1MSG2, K_SHA256RNDS2, K_SHA256MSG1, K_SHA256MSG2, K_SHA1RNDS4,
 };
 
 struct op {
 	enum op_kind kind;
 	bool vex, has_imm, three_op;
-	bool is_avx, store, shift_var;
 	int len;            /* 16 or 32 */
 	int dst, src1, rm;  /* vector register numbers; rm < 0 means memory */
 	int sat, a_signed, b_signed, aes_op;
-	int velem, vaux, memsz, dst_gpr;
-	enum emu_vop vop;
-	void __user *mem_addr;
 	u8 imm;
 };
-
-/* ---- GPR helpers for BMI1/2, LZCNT/TZCNT and MOVBE ---------------------- */
-static u64 gpr_read(struct pt_regs *regs, int n)
-{
-	switch (n) {
-	case 0: return regs->ax;
-	case 1: return regs->cx;
-	case 2: return regs->dx;
-	case 3: return regs->bx;
-	case 4: return regs->sp;
-	case 5: return regs->bp;
-	case 6: return regs->si;
-	case 7: return regs->di;
-	case 8: return regs->r8;
-	case 9: return regs->r9;
-	case 10: return regs->r10;
-	case 11: return regs->r11;
-	case 12: return regs->r12;
-	case 13: return regs->r13;
-	case 14: return regs->r14;
-	case 15: return regs->r15;
-	}
-	return 0;
-}
-
-static void gpr_write(struct pt_regs *regs, int n, u64 v)
-{
-	switch (n) {
-	case 0: regs->ax = v; break;
-	case 1: regs->cx = v; break;
-	case 2: regs->dx = v; break;
-	case 3: regs->bx = v; break;
-	case 4: regs->sp = v; break;
-	case 5: regs->bp = v; break;
-	case 6: regs->si = v; break;
-	case 7: regs->di = v; break;
-	case 8: regs->r8 = v; break;
-	case 9: regs->r9 = v; break;
-	case 10: regs->r10 = v; break;
-	case 11: regs->r11 = v; break;
-	case 12: regs->r12 = v; break;
-	case 13: regs->r13 = v; break;
-	case 14: regs->r14 = v; break;
-	case 15: regs->r15 = v; break;
-	}
-}
-
-/* Haswell-baseline scalar instructions a Sandy/Ivy Bridge CPU lacks. */
-enum gpr_kind {
-	G_ANDN, G_BEXTR, G_BLSI, G_BLSMSK, G_BLSR, G_BZHI, G_RORX,
-	G_LZCNT, G_TZCNT, G_MOVBE, G_ADCX, G_ADOX,
-};
-struct gop {
-	enum gpr_kind kind;
-	int dst, src1, src2;	/* GPR numbers; src2 < 0 = immediate in imm */
-	int width;		/* 4 or 8 */
-	bool is_imm, vex, store, mem_src;
-	u8 imm;
-	void __user *mem_addr;
-};
-
-/* Classify a VEX-encoded AVX/AVX2 instruction. Called before the newer-extension
- * table; returns false for instructions we do not emulate (they get SIGILL). */
-static bool classify_avx(struct insn *insn, struct op *o, u8 opc, int m, int pp,
-			 int w, int l, int vv, int reg, int rm)
-{
-	int sub = X86_MODRM_REG(insn->modrm.value);
-	enum emu_vop vop;
-	int elem = 4, aux = 0;
-
-	(void)vv;
-	/* vzeroupper/vzeroall: VEX.0F 77, no ModR/M byte. */
-	if (m == 0 && opc == 0x77 && pp == 0) {
-		o->kind = K_ZEROUPPER;
-		return true;
-	}
-
-	vop = EMU_V_MOV;
-	o->is_avx = true;
-	o->len = l ? 32 : 16;
-	o->memsz = o->len;
-
-	if (m == 0) {			/* VEX.0F */
-		switch (opc) {
-		case 0x10: case 0x28: case 0x6f:
-			vop = EMU_V_MOV; elem = o->len; break;
-		case 0x11: case 0x29: case 0x7f:
-			vop = EMU_V_MOV; elem = o->len; o->store = true; o->src1 = reg; break;
-		case 0x57: case 0xef:
-			vop = EMU_V_XOR; elem = o->len; break;
-		case 0xeb: vop = EMU_V_OR; elem = o->len; break;
-		case 0xdb: vop = pp == 3 ? EMU_V_ANDN : EMU_V_AND; elem = o->len; break;
-		case 0xfe: vop = EMU_V_ADD; elem = 4; break;
-		case 0xd4: vop = EMU_V_ADD; elem = 8; break;
-		case 0xfd: vop = EMU_V_ADD; elem = 2; break;
-		case 0xfc: vop = EMU_V_ADD; elem = 1; break;
-		case 0xfb: vop = EMU_V_SUB; elem = 8; break;
-		case 0xfa: vop = EMU_V_SUB; elem = 4; break;
-		case 0xf9: vop = EMU_V_SUB; elem = 2; break;
-		case 0xf8: vop = EMU_V_SUB; elem = 1; break;
-		case 0x76: vop = EMU_V_EQ; elem = 4; break;
-		case 0x75: vop = EMU_V_EQ; elem = 2; break;
-		case 0x74: vop = EMU_V_EQ; elem = 1; break;
-		case 0x64: vop = EMU_V_GT; elem = 4; break;	/* vpcmpgtd */
-		case 0xd7: vop = EMU_V_MOVMSK; elem = 1; o->dst_gpr = reg; break;
-		case 0x50: vop = EMU_V_MOVMSK; elem = pp == 1 ? 8 : 4; o->dst_gpr = reg; break;
-		case 0x71: case 0x72: case 0x73: {
-			int kind;
-
-			elem = opc == 0x71 ? 2 : opc == 0x72 ? 4 : 8;
-			if (X86_MODRM_MOD(insn->modrm.value) != 3)
-				return false;
-			if (sub == 6) { vop = EMU_V_SLL; kind = 0; }
-			else if (sub == 2) { vop = EMU_V_SRL; kind = 1; }
-			else if (sub == 4) { vop = EMU_V_SRA; kind = 2; }
-			else return false;
-			if (insn->immediate.nbytes)
-				aux = insn->immediate.value & 0xff;
-			else {
-				o->shift_var = true;
-				aux = kind;		/* vaux carries SLL/SRL/SRA for variable form */
-				o->src1 = vv;		/* VEX.vvvv holds the shift counts */
-			}
-			o->dst = rm;			/* ModRM.rm is the source/destination */
-			break;
-		}
-		case 0x14: vop = EMU_V_UNPCKL; elem = pp == 1 ? 8 : 4; break;
-		case 0x15: vop = EMU_V_UNPCKH; elem = pp == 1 ? 8 : 4; break;
-		case 0x5b: vop = EMU_V_CVTTPS2DQ; elem = 4; break;
-		case 0x5a: vop = EMU_V_CVTPD2PS; elem = 4; break;
-		default: return false;
-		}
-	} else if (m == 2) {		/* VEX.0F38 */
-		switch (opc) {
-		case 0x7a: vop = EMU_V_BROADCAST; elem = 1; aux = 1; o->memsz = 1; break;
-		case 0x7b: vop = EMU_V_BROADCAST; elem = 2; aux = 2; o->memsz = 2; break;
-		case 0x7c: vop = EMU_V_BROADCAST; elem = w ? 8 : 4; aux = elem; o->memsz = elem; break;
-		case 0x16: vop = EMU_V_BROADCAST; elem = pp == 1 ? 8 : 4; aux = elem; o->memsz = elem; break;
-		case 0x00: vop = EMU_V_SHUFB; elem = 1; break;
-		case 0x45: case 0x46: case 0x47: {	/* vpsrlv*, vpsrav*, vpsllv* */
-			int kind = opc == 0x45 ? 1 : opc == 0x46 ? 2 : 0;
-
-			vop = EMU_V_SLL; elem = w ? 8 : 4;
-			o->shift_var = true; aux = kind;
-			break;
-		}
-		case 0x0c: vop = EMU_V_PERMILPS; elem = 4; aux = insn->immediate.nbytes ?
-					(insn->immediate.value & 0xff) : -1; break;
-		case 0x0d: vop = EMU_V_PERMILPD; elem = 8; aux = insn->immediate.nbytes ?
-					(insn->immediate.value & 0xff) : -1; break;
-		case 0x1c: vop = EMU_V_ABS; elem = 1; break;
-		case 0x1d: vop = EMU_V_ABS; elem = 2; break;
-		case 0x1e: vop = EMU_V_ABS; elem = 4; break;
-		case 0x1f: vop = EMU_V_ABS; elem = 8; break;
-		case 0x20: vop = EMU_V_MOVSX; elem = 2; aux = 1; break;
-		case 0x21: vop = EMU_V_MOVSX; elem = 4; aux = 1; break;
-		case 0x22: vop = EMU_V_MOVSX; elem = 8; aux = 1; break;
-		case 0x23: vop = EMU_V_MOVSX; elem = 4; aux = 2; break;
-		case 0x24: vop = EMU_V_MOVSX; elem = 8; aux = 2; break;
-		case 0x25: vop = EMU_V_MOVSX; elem = 8; aux = 4; break;
-		case 0x30: vop = EMU_V_MOVZX; elem = 2; aux = 1; break;
-		case 0x31: vop = EMU_V_MOVZX; elem = 4; aux = 1; break;
-		case 0x32: vop = EMU_V_MOVZX; elem = 8; aux = 1; break;
-		case 0x33: vop = EMU_V_MOVZX; elem = 4; aux = 2; break;
-		case 0x34: vop = EMU_V_MOVZX; elem = 8; aux = 2; break;
-		case 0x35: vop = EMU_V_MOVZX; elem = 8; aux = 4; break;
-		case 0x29: vop = EMU_V_EQ; elem = 8; break;
-		case 0x37: vop = EMU_V_GT; elem = 8; break;
-		case 0x38: vop = EMU_V_MIN_S; elem = 1; break;
-		case 0x39: vop = EMU_V_MIN_S; elem = 4; break;
-		case 0x3a: vop = EMU_V_MIN_U; elem = 2; break;
-		case 0x3b: vop = EMU_V_MIN_U; elem = 4; break;
-		case 0x3c: vop = EMU_V_MAX_S; elem = 1; break;
-		case 0x3d: vop = EMU_V_MAX_S; elem = 4; break;
-		case 0x3e: vop = EMU_V_MAX_U; elem = 2; break;
-		case 0x3f: vop = EMU_V_MAX_U; elem = 4; break;
-		case 0x40: vop = EMU_V_MUL; elem = 4; break;
-		case 0x41: vop = EMU_V_MUL; elem = 8; break;
-		case 0x90: vop = EMU_V_PERMQ; elem = 8; aux = insn->immediate.value & 0xff; break;
-		case 0x91: vop = EMU_V_PERMQ; elem = 8; aux = insn->immediate.value & 0xff; break;
-		case 0x92: vop = EMU_V_PERM2I128; elem = 16; aux = insn->immediate.value & 0xff; break;
-		default: return false;
-		}
-	} else if (m == 3) {		/* VEX.0F3A */
-		switch (opc) {
-		case 0x02: vop = EMU_V_BLEND; elem = 4; aux = insn->immediate.value & 0xff; break;
-		case 0x0d: vop = EMU_V_BLEND; elem = 8; aux = insn->immediate.value & 0xff; break;
-		case 0x0e: vop = EMU_V_BLEND; elem = 2; aux = insn->immediate.value & 0xff; break;
-		case 0x0f: vop = EMU_V_ALIGNR; elem = 1; aux = insn->immediate.value & 0xff; break;
-		case 0x04: vop = EMU_V_PERMILPS; elem = 4; aux = insn->immediate.value & 0xff; break;
-		case 0x05: vop = EMU_V_PERMILPD; elem = 8; aux = insn->immediate.value & 0xff; break;
-		default: return false;
-		}
-	} else {
-		return false;
-	}
-
-	o->vop = vop;
-	o->velem = elem;
-	o->vaux = aux;
-	if (o->dst_gpr >= 0)
-		o->is_avx = true;
-	return true;
-}
 
 /* Classify a decoded instruction; returns false if not one we emulate. */
 static bool classify(struct insn *insn, struct op *o)
@@ -273,8 +65,6 @@ static bool classify(struct insn *insn, struct op *o)
 	int i, reg, rm, vv = 0, w = 0, l = 0;
 
 	memset(o, 0, sizeof(*o));
-	/* -1 means "no GPR destination"; 0 is a valid GPR (RAX) for vpmovmsk. */
-	o->dst_gpr = -1;
 	modrm = insn->modrm.value;
 	reg = X86_MODRM_REG(modrm);
 	rm = X86_MODRM_RM(modrm);
@@ -297,8 +87,6 @@ static bool classify(struct insn *insn, struct op *o)
 		if (insn->opcode.nbytes != 1)
 			return false;
 		opc = insn->opcode.bytes[0];
-		if (classify_avx(insn, o, opc, m, pp, w, l, vv, reg, rm))
-			return true;
 	} else {
 		/* legacy SSE encodings: 0F 38 xx / 0F 3A xx, with optional 66 */
 		if (insn->opcode.nbytes != 3 || insn->opcode.bytes[0] != 0x0f)
@@ -419,49 +207,18 @@ static void vreg_store(struct xregs_state *xs, int n, int len, const u8 *in, boo
 	}
 }
 
-static void do_emulate(struct op *o, struct xregs_state *xs, const u8 *mem,
-		       struct pt_regs *regs, u8 *out)
+static void do_emulate(struct op *o, struct xregs_state *xs, const u8 *mem)
 {
 	u8 a[32], b[32], d[32];
-	int len = o->len, i;
+	int len = o->len;
 
-	if (o->kind == K_ZEROUPPER) {
-		for (i = 0; i < 16; i++) {
-			u8 *hi = xstate_addr_for_write(xs, XFEATURE_YMM);
+	vreg_load(xs, o->src1, len, a);
+	if (o->rm >= 0)
+		vreg_load(xs, o->rm, len, b);
+	else
+		memcpy(b, mem, len);
+	vreg_load(xs, o->dst, len, d);
 
-			if (hi)
-				memset(hi + 16 * i, 0, 16);
-		}
-		return;
-	}
-
-	if (o->store) {
-		/* ModRM.reg holds the source vector; r/m is the memory destination. */
-		vreg_load(xs, o->src1, len, b);
-		memset(a, 0, len);
-		memset(d, 0, len);
-	} else {
-		vreg_load(xs, o->src1, len, a);
-		if (o->rm >= 0)
-			vreg_load(xs, o->rm, len, b);
-		else
-			memcpy(b, mem, len);
-		vreg_load(xs, o->dst, len, d);
-	}
-
-	if (o->is_avx && o->vop != EMU_V_MOV &&
-	    (o->velem <= 0 || o->len < o->velem || o->len < 16)) {
-		/* A bad decode must SIGILL the process, not divide-by-zero the kernel. */
-		pr_warn_ratelimited("isa_emu: BAD decode kind=%d vop=%d len=%d elem=%d aux=%d comm=%s\n",
-				    o->kind, (int)o->vop, o->len, o->velem, o->vaux, current->comm);
-		return;
-	}
-	if (o->is_avx) {
-		if (o->shift_var)
-			emu_vshift_var(d, a, b, len, o->velem, o->vaux);
-		else
-			emu_vop(d, a, b, len, o->velem, o->vop, o->vaux);
-	} else
 	switch (o->kind) {
 	case K_GF2P8MUL:    emu_gf2p8mulb(d, a, b, len); break;
 	case K_GF2P8AFF:    emu_gf2p8affineqb(d, a, b, o->imm, len); break;
@@ -488,16 +245,7 @@ static void do_emulate(struct op *o, struct xregs_state *xs, const u8 *mem,
 	}
 	default: return;
 	}
-
-	if (out)
-		memcpy(out, d, len);
-	if (o->dst_gpr >= 0) {
-		u32 m = (u32)d[0] | (u32)d[1] << 8 | (u32)d[2] << 16 | (u32)d[3] << 24;
-
-		gpr_write(regs, o->dst_gpr, m);
-	} else if (!o->store) {
-		vreg_store(xs, o->dst, len, d, o->vex || o->is_avx);
-	}
+	vreg_store(xs, o->dst, len, d, o->vex);
 }
 
 
@@ -590,165 +338,118 @@ static void prof_dump(void)
 			prof[top[i]].kind, prof[top[i]].off, prof[top[i]].path);
 }
 
-/* ---- Haswell-baseline GPR instructions (BMI1/2, LZCNT/TZCNT, MOVBE) ----- */
-static bool classify_gpr(struct insn *insn, struct gop *g)
+/* ---- ADX: ADCX (66 0F 38 F6 /r) and ADOX (F3 0F 38 F6 /r) -------------- */
+enum gpr_kind { G_ADCX, G_ADOX };
+struct gop {
+	enum gpr_kind kind;
+	int dst, src, width;
+	void __user *mem_addr;
+};
+
+static u64 gpr_read(struct pt_regs *regs, int n)
+{
+	switch (n) {
+	case 0: return regs->ax;
+	case 1: return regs->cx;
+	case 2: return regs->dx;
+	case 3: return regs->bx;
+	case 4: return regs->sp;
+	case 5: return regs->bp;
+	case 6: return regs->si;
+	case 7: return regs->di;
+	case 8: return regs->r8;
+	case 9: return regs->r9;
+	case 10: return regs->r10;
+	case 11: return regs->r11;
+	case 12: return regs->r12;
+	case 13: return regs->r13;
+	case 14: return regs->r14;
+	case 15: return regs->r15;
+	}
+	return 0;
+}
+
+static void gpr_write(struct pt_regs *regs, int n, u64 v)
+{
+	switch (n) {
+	case 0: regs->ax = v; break;
+	case 1: regs->cx = v; break;
+	case 2: regs->dx = v; break;
+	case 3: regs->bx = v; break;
+	case 4: regs->sp = v; break;
+	case 5: regs->bp = v; break;
+	case 6: regs->si = v; break;
+	case 7: regs->di = v; break;
+	case 8: regs->r8 = v; break;
+	case 9: regs->r9 = v; break;
+	case 10: regs->r10 = v; break;
+	case 11: regs->r11 = v; break;
+	case 12: regs->r12 = v; break;
+	case 13: regs->r13 = v; break;
+	case 14: regs->r14 = v; break;
+	case 15: regs->r15 = v; break;
+	}
+}
+
+static bool classify_adx(struct insn *insn, struct gop *g, struct pt_regs *regs)
 {
 	int reg = X86_MODRM_REG(insn->modrm.value), rm = X86_MODRM_RM(insn->modrm.value);
-	int sub = reg, m = 0, pp = 0, w = 0, vv = 0, opc, i;
-	bool vex = insn->vex_prefix.nbytes > 0, f3 = false, f2 = false, p66 = false;
+	bool p66 = false, f3 = false;
+	int i;
 
-	memset(g, 0, sizeof(*g));
-	g->vex = vex;
-	g->width = 4;
-
-	if (vex) {
-		u8 *vp = insn->vex_prefix.bytes;
-
-		if (vp[0] != 0xc4 && vp[0] != 0xc5)
-			return false;
-		if (insn->opcode.nbytes != 1)
-			return false;
-		m = insn_vex_m_bits(insn);
-		pp = insn_vex_p_bits(insn);
-		w = !!X86_VEX_W(vp[2]);
-		vv = (~X86_VEX_V(vp[2])) & 0xf;
-		if (!X86_VEX_R(vp[1]))
-			reg += 8;
-		if (insn->vex_prefix.nbytes == 3 && !X86_VEX_B(vp[1]))
-			rm += 8;
-		opc = insn->opcode.bytes[0];
-		g->width = w ? 8 : 4;
-		g->dst = reg;
-		g->src1 = vv;
-		g->src2 = rm;
-		g->is_imm = insn->immediate.nbytes > 0;
-		g->imm = insn->immediate.value;
-		g->mem_src = X86_MODRM_MOD(insn->modrm.value) != 3;
-
-		if (pp || m == 1)
-			return false;
-		if (m == 2) {
-			switch (opc) {
-			case 0xf2: g->kind = G_ANDN; return true;
-			case 0xf7: g->kind = G_BEXTR; return true;
-			case 0xf3:
-				g->kind = sub == 1 ? G_BLSI : sub == 2 ? G_BLSMSK :
-					  sub == 3 ? G_BLSR : (enum gpr_kind)0;
-				return g->kind != 0;
-			case 0xf5: g->kind = G_BZHI; return true;
-			}
-		}
-		if (m == 3 && opc == 0xf0) {
-			g->kind = G_RORX; return true;
-		}
+	if (insn->vex_prefix.nbytes || insn->opcode.nbytes != 3 ||
+	    insn->opcode.bytes[0] != 0x0f || insn->opcode.bytes[1] != 0x38 ||
+	    insn->opcode.bytes[2] != 0xf6)
 		return false;
-	}
-
 	for (i = 0; i < insn->prefixes.nbytes; i++) {
-		if (insn->prefixes.bytes[i] == 0xf3)
-			f3 = true;
-		else if (insn->prefixes.bytes[i] == 0xf2)
-			f2 = true;
-		else if (insn->prefixes.bytes[i] == 0x66)
+		if (insn->prefixes.bytes[i] == 0x66)
 			p66 = true;
+		else if (insn->prefixes.bytes[i] == 0xf3)
+			f3 = true;
 	}
+	if (p66 == f3)
+		return false;
 	if (insn->rex_prefix.nbytes) {
 		if (X86_REX_R(insn->rex_prefix.value))
 			reg += 8;
 		if (X86_REX_B(insn->rex_prefix.value))
 			rm += 8;
-		if (X86_REX_W(insn->rex_prefix.value))
-			g->width = 8;
 	}
+	g->kind = p66 ? G_ADCX : G_ADOX;
 	g->dst = reg;
-	g->src2 = rm;
-	g->mem_src = X86_MODRM_MOD(insn->modrm.value) != 3;
-
-	if (insn->opcode.nbytes == 2 && insn->opcode.bytes[0] == 0x0f && f3) {
-		opc = insn->opcode.bytes[1];
-		if (opc == 0xbd) { g->kind = G_LZCNT; return true; }
-		if (opc == 0xbc) { g->kind = G_TZCNT; return true; }
+	g->src = rm;
+	g->width = insn->rex_prefix.nbytes && X86_REX_W(insn->rex_prefix.value) ? 8 : 4;
+	g->mem_addr = NULL;
+	if (X86_MODRM_MOD(insn->modrm.value) != 3) {
+		g->mem_addr = insn_get_addr_ref(insn, regs);
+		if (g->mem_addr == (void __user *)-1L)
+			return false;
 	}
-	if (insn->opcode.nbytes == 3 && insn->opcode.bytes[0] == 0x0f &&
-	    insn->opcode.bytes[1] == 0x38) {
-		opc = insn->opcode.bytes[2];
-		if (opc == 0xf0 || opc == 0xf1) {
-			g->kind = G_MOVBE;
-			g->store = opc == 0xf1;
-			return true;
-		}
-		/* ADCX: 66 0F 38 F6 /r ; ADOX: F3 0F 38 F6 /r (ADX, Broadwell+) */
-		if (opc == 0xf6 && !f2) {
-			if (p66) { g->kind = G_ADCX; return true; }
-			if (f3)  { g->kind = G_ADOX; return true; }
-		}
-	}
-	return false;
+	return true;
 }
 
-static u64 gpr_ld(const u8 *p, int n)
+static void do_adx(struct gop *g, struct pt_regs *regs, const u8 *mem)
 {
-	u64 v = 0;
+	u64 a, mask = g->width == 8 ? ~0ULL : 0xffffffffULL;
+	int cf = !!(regs->flags & (1UL << 0));	/* X86_EFLAGS_CF */
+	int of = !!(regs->flags & (1UL << 11));	/* X86_EFLAGS_OF */
+	struct emu_adx_out out;
 	int i;
 
-	for (i = 0; i < n; i++)
-		v |= (u64)p[i] << (8 * i);
-	return v;
-}
-
-static void do_gpr(struct gop *g, struct pt_regs *regs, const u8 *mem, void __user *addr)
-{
-	u64 a, b = 0, r;
-	u32 ctrl = 0;
-	enum emu_grop op;
-
-	switch (g->kind) {
-	case G_ANDN:   op = EMU_G_ANDN;   b = gpr_read(regs, g->src1); break;
-	case G_BEXTR:  op = EMU_G_BEXTR;  ctrl = g->is_imm ? g->imm :
-					(u32)gpr_read(regs, g->src1); break;
-	case G_BLSI:   op = EMU_G_BLSI;   break;
-	case G_BLSMSK: op = EMU_G_BLSMSK; break;
-	case G_BLSR:   op = EMU_G_BLSR;   break;
-	case G_BZHI:   op = EMU_G_BZHI;   ctrl = g->imm; break;
-	case G_RORX:   op = EMU_G_RORX;   ctrl = g->imm; break;
-	case G_LZCNT:  op = EMU_G_LZCNT;  break;
-	case G_TZCNT:  op = EMU_G_TZCNT;  break;
-	case G_MOVBE:  op = EMU_G_MOVBE;  break;
-	case G_ADCX: case G_ADOX: op = EMU_G_ANDN; break; /* handled below */
-	default: return;
-	}
-
-	/* MOVBE store: ModRM.reg is the source register, r/m the memory destination. */
-	if (g->store)
-		a = gpr_read(regs, g->dst);
-	else if (g->mem_src)
-		a = gpr_ld(mem, g->width);
-	else
-		a = gpr_read(regs, g->src2);
-
-	/* ADCX/ADOX: DEST = DEST + r/m + CF (or OF); only that flag is written. */
-	if (g->kind == G_ADCX || g->kind == G_ADOX) {
-		u64 dest = gpr_read(regs, g->dst);
-		int cf = !!(regs->flags & (1UL << 0));	/* X86_EFLAGS_CF */
-		int of = !!(regs->flags & (1UL << 11));	/* X86_EFLAGS_OF */
-		struct emu_adx_out out = emu_adx(dest, a, g->width,
-						 g->kind == G_ADCX ? 0 : 1, cf, of);
-
-		gpr_write(regs, g->dst, out.result);
-		if (g->kind == G_ADCX)
-			regs->flags = (regs->flags & ~(1UL << 0)) | (out.cf ? (1UL << 0) : 0);
-		else
-			regs->flags = (regs->flags & ~(1UL << 11)) | (out.of ? (1UL << 11) : 0);
-		return;
-	}
-
-	r = emu_grop(op, a, b, ctrl, g->width);
-	if (g->store) {
-		if (copy_to_user(addr, &r, g->width))
-			force_sig_fault(SIGSEGV, SEGV_MAPERR, addr);
+	if (g->mem_addr) {
+		a = 0;
+		for (i = 0; i < g->width; i++)
+			a |= (u64)mem[i] << (8 * i);
 	} else {
-		gpr_write(regs, g->dst, r);
+		a = gpr_read(regs, g->src);
 	}
+	out = emu_adx(gpr_read(regs, g->dst), a, g->width,
+		      g->kind == G_ADCX ? 0 : 1, cf, of);
+	gpr_write(regs, g->dst, out.result & mask);
+	if (g->kind == G_ADCX)
+		regs->flags = (regs->flags & ~(1UL << 0)) | (out.cf ? (1UL << 0) : 0);
+	else
+		regs->flags = (regs->flags & ~(1UL << 11)) | (out.of ? (1UL << 11) : 0);
 }
 
 bool isa_emu_handle_ud(struct pt_regs *regs)
@@ -757,10 +458,9 @@ bool isa_emu_handle_ud(struct pt_regs *regs)
 	struct insn insn;
 	struct op o;
 	struct gop g;
-	u8 mem[32], out[32];
+	u8 mem[32];
 	struct xregs_state *xs;
 	void __user *addr = NULL;
-	bool is_gpr;
 	int nbuf;
 
 	if (!isa_emu_enabled || !user_mode(regs) || !boot_cpu_has(X86_FEATURE_XSAVE))
@@ -768,77 +468,60 @@ bool isa_emu_handle_ud(struct pt_regs *regs)
 	nbuf = insn_fetch_from_user(regs, buf);
 	if (nbuf <= 0 || !insn_decode_from_regs(&insn, regs, buf, nbuf))
 		return false;
-	if (classify(&insn, &o))
-		is_gpr = false;
-	else if (classify_gpr(&insn, &g))
-		is_gpr = true;
-	else
-		return false;
-
-	/* The decoder does not fold VEX.X/B into the REX bits it uses for addressing. */
-	if (insn.vex_prefix.nbytes && (is_gpr ? g.mem_src : o.rm < 0)) {
-		u8 *vp = insn.vex_prefix.bytes;
-		u8 rex = 0x40;
-
-		if (insn.vex_prefix.nbytes == 3) {
-			if (!X86_VEX_X(vp[1]))
-				rex |= 2;
-			if (!X86_VEX_B(vp[1]))
-				rex |= 1;
-		}
-		insn.rex_prefix.value = rex;
-		insn.rex_prefix.nbytes = 1;
-	}
-
-	if (is_gpr) {
-		if (g.mem_src || g.store) {
-			addr = insn_get_addr_ref(&insn, regs);
-			if (addr == (void __user *)-1L)
-				return false;
-			if (g.mem_src && copy_from_user(mem, addr, g.width)) {
-				force_sig_fault(SIGSEGV, SEGV_MAPERR, addr);
+	if (!classify(&insn, &o)) {
+		if (!classify_adx(&insn, &g, regs))
+			return false;
+		if (g.mem_addr) {
+			if (copy_from_user(mem, g.mem_addr, g.width)) {
+				force_sig_fault(SIGSEGV, SEGV_MAPERR, g.mem_addr);
 				return true;
 			}
+			do_adx(&g, regs, mem);
+		} else {
+			do_adx(&g, regs, NULL);
 		}
-		do_gpr(&g, regs, mem, addr);
-	} else {
-		if (o.rm < 0) {
-			addr = insn_get_addr_ref(&insn, regs);
-			if (addr == (void __user *)-1L)
-				return false;
-			o.mem_addr = addr;
-			if (!o.store) {
-				memset(mem, 0, sizeof(mem));
-				if (copy_from_user(mem, addr, o.memsz)) {
-					force_sig_fault(SIGSEGV, SEGV_MAPERR, addr);
-					return true;
-				}
-			}
-		}
-		if (o.is_avx && o.vop != EMU_V_MOV &&
-		    (o.velem <= 0 || o.len < o.velem || o.len < 16)) {
-			pr_warn_ratelimited("isa_emu: BAD decode vop=%d len=%d elem=%d aux=%d bytes=%02x %02x %02x %02x comm=%s\n",
-					    (int)o.vop, o.len, o.velem, o.vaux,
-					    buf[0], buf[1], buf[2], buf[3], current->comm);
-			return false;	/* let the normal #UD path SIGILL this process */
-		}
-		xs = fpu_emu_begin();
-		do_emulate(&o, xs, mem, regs, out);
-		fpu_emu_end();
-		if (o.store && copy_to_user(o.mem_addr, out, o.memsz))
-			force_sig_fault(SIGSEGV, SEGV_MAPERR, o.mem_addr);
+		regs->ip += insn.length;
+		return true;
 	}
+
+	if (o.rm < 0) {
+
+		/* the decoder does not fold VEX.X/B into the REX bits it uses for addressing */
+		if (o.vex) {
+			u8 *vp = insn.vex_prefix.bytes;
+			u8 rex = 0x40;
+
+			if (insn.vex_prefix.nbytes == 3) {
+				if (!X86_VEX_X(vp[1]))
+					rex |= 2;
+				if (!X86_VEX_B(vp[1]))
+					rex |= 1;
+			}
+			insn.rex_prefix.value = rex;
+			insn.rex_prefix.nbytes = 1;
+		}
+		addr = insn_get_addr_ref(&insn, regs);
+		if (addr == (void __user *)-1L)
+			return false;
+		if (copy_from_user(mem, addr, o.len)) {
+			force_sig_fault(SIGSEGV, SEGV_MAPERR, addr);
+			return true;
+		}
+	}
+
+	xs = fpu_emu_begin();
+	do_emulate(&o, xs, mem);
+	fpu_emu_end();
 
 	regs->ip += insn.length;
 	{
 		static atomic64_t total;
 		long n = atomic64_inc_return(&total);
-		int kind = is_gpr ? 100 + (int)g.kind : o.kind;
 
-		prof_hit(regs->ip - insn.length, kind);
+		prof_hit(regs->ip - insn.length, o.kind);
 		if (!(n & 0xfffff)) {
 			pr_info("isa_emu: %ld instructions emulated (last: %s[%d] kind=%d)\n",
-				n, current->comm, task_pid_nr(current), kind);
+				n, current->comm, task_pid_nr(current), o.kind);
 			prof_dump();
 		}
 	}

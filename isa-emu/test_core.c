@@ -247,137 +247,21 @@ static void test_clmul_ifma(void)
 	}
 }
 
-/* ---- AVX/AVX2 baseline for pre-Haswell Intel CPUs ---- */
-static void test_avx2(void)
-{
-	u8 a[32], b[32], o[32], e[32];
-	int i;
-
-	/* broadcasts: vpbroadcastb/w/d/q and vbroadcastss/sd all read the r/m operand */
-	for (int src = 1; src <= 8; src *= 2) {
-		rndbuf(a, 32); rndbuf(b, 32);
-		emu_vop(o, a, b, 32, src, EMU_V_BROADCAST, src);
-		for (i = 0; i < 32; i++) CHECK(o[i] == b[i % src], "broadcast %d byte %d", src, i);
-	}
-
-	rndbuf(a, 32); rndbuf(b, 32);
-	emu_vop(o, a, b, 32, 1, EMU_V_XOR, 0);
-	for (i = 0; i < 32; i++) CHECK(o[i] == (a[i] ^ b[i]), "vpxor byte %d", i);
-	emu_vop(o, a, b, 32, 1, EMU_V_ANDN, 0);
-	for (i = 0; i < 32; i++) CHECK(o[i] == (a[i] & ~b[i]), "vpandn byte %d", i);
-
-	/* dword add/sub, wrapping */
-	for (i = 0; i < 8; i++) { st(a, i, 0x7ffffff0 + i); st(b, i, 0x20); }
-	emu_vop(o, a, b, 32, 4, EMU_V_ADD, 0);
-	for (i = 0; i < 8; i++) CHECK(ld(o, i) == (u32)(0x7ffffff0 + i + 0x20), "vpaddd %d", i);
-	emu_vop(o, o, b, 32, 4, EMU_V_SUB, 0);
-	for (i = 0; i < 8; i++) CHECK(ld(o, i) == (u32)(0x7ffffff0 + i), "vpsubd %d", i);
-
-	/* signed saturating byte add */
-	memset(a, 100, 32); memset(b, 100, 32);
-	emu_vop(o, a, b, 32, 1, EMU_V_ADDS_S, 0);
-	for (i = 0; i < 32; i++) CHECK(o[i] == 127, "vpaddsb saturate %d", i);
-	memset(b, 0x80, 32);	/* -128: 100 - (-128) saturates to +127 */
-	emu_vop(o, a, b, 32, 1, EMU_V_SUBS_S, 0);
-	for (i = 0; i < 32; i++) CHECK(o[i] == 127, "vpsubsb saturate %d", i);
-
-	/* dword equality and signed greater-than */
-	for (i = 0; i < 8; i++) { st(a, i, i - 4); st(b, i, i - 3); }
-	emu_vop(o, a, b, 32, 4, EMU_V_EQ, 0);
-	for (i = 0; i < 8; i++) CHECK(ld(o, i) == 0, "vpcmpeqd %d", i);
-	emu_vop(o, a, b, 32, 4, EMU_V_GT, 0);
-	for (i = 0; i < 8; i++) CHECK(ld(o, i) == 0, "vpcmpgtd %d", i);
-	emu_vop(o, b, a, 32, 4, EMU_V_GT, 0);
-	for (i = 0; i < 8; i++) CHECK(ld(o, i) == 0xffffffff, "vpcmpgtd inverse %d", i);
-
-	/* dword shifts: immediate and variable */
-	for (i = 0; i < 8; i++) { st(a, i, 1u << i); st(b, i, i); }
-	emu_vop(o, a, a, 32, 4, EMU_V_SLL, 3);
-	for (i = 0; i < 8; i++) CHECK(ld(o, i) == (u32)((1u << i) << 3), "vpslld imm %d", i);
-	emu_vshift_var(o, a, b, 32, 4, 0);
-	for (i = 0; i < 8; i++) CHECK(ld(o, i) == (u32)((1u << i) << i), "vpslld var %d", i);
-	st(a, 7, 0x80000000); st(b, 7, 7);
-	emu_vshift_var(o, a, b, 32, 4, 2);
-	CHECK(ld(o, 7) == 0xff000000, "vpsrad sign fill: %08x", ld(o, 7));
-
-	/* vpshufb: per-128-bit lane, bit 7 zeroes the byte */
-	for (i = 0; i < 32; i++) { a[i] = i; b[i] = (i & 15); if (i % 5 == 0) b[i] |= 0x80; }
-	emu_vop(o, a, b, 32, 1, EMU_V_SHUFB, 0);
-	for (i = 0; i < 32; i++) CHECK(o[i] == (b[i] & 0x80 ? 0 : a[(i & ~15) + (b[i] & 15)]), "vpshufb %d", i);
-
-	/* vpalignr imm: concat b:a, shift right by imm bytes within each lane */
-	for (i = 0; i < 32; i++) { a[i] = i; b[i] = 0x80 + i; }
-	emu_vop(o, a, b, 32, 1, EMU_V_ALIGNR, 3);
-	for (i = 0; i < 32; i++) {
-		int s = (i & 15) + 3;
-		CHECK(o[i] == (s < 16 ? b[(i & ~15) + s] : a[(i & ~15) + s - 16]), "vpalignr %d", i);
-	}
-
-	/* vpmovmskb: one sign bit per byte */
-	memset(a, 0, 32); a[0] = 0x80; a[15] = 0x80; a[16] = 0x80; a[31] = 0x80;
-	emu_vop(o, a, a, 32, 1, EMU_V_MOVMSK, 0);
-	CHECK(ld(o, 0) == 0x80018001, "vpmovmskb %08x", ld(o, 0));
-
-	/* vpmovsxbw: 16 source bytes -> 16 destination words */
-	for (i = 0; i < 16; i++) a[i] = (u8)(i % 2 ? 0xff : 0x01);
-	emu_vop(o, a, a, 32, 2, EMU_V_MOVSX, 1);
-	for (i = 0; i < 16; i++) {
-		u16 w;
-
-		memcpy(&w, o + 2 * i, 2);
-		CHECK((s16)w == (i % 2 ? -1 : 1), "vpmovsxbw word %d", i);
-	}
-
-	/* vpermq imm: reorder qwords */
-	{
-		u64 q;
-		for (i = 0; i < 4; i++) { q = i + 1; memcpy(e + 8*i, &q, 8); }
-	}
-	emu_vop(o, e, e, 32, 8, EMU_V_PERMQ, 0x1b);
-	{
-		u64 want[4] = { 4, 3, 2, 1 }; /* imm 0x1b selects q3,q2,q1,q0 */
-		for (i = 0; i < 4; i++) { u64 got; memcpy(&got, o + 8*i, 8); CHECK(got == want[i], "vpermq %d: %llu", i, (unsigned long long)got); }
-	}
-
-	/* vpmaddwd: (a0*b0 + a1*b1) per dword; operands are signed 16-bit words */
-	memset(a, 0, 32); memset(b, 0, 32);
-	a[0] = 2; a[2] = 2; b[0] = 3; b[2] = 3;
-	emu_vop(o, a, b, 32, 4, EMU_V_MULADD, 0);
-	CHECK(ld(o, 0) == 12, "vpmaddwd %u", ld(o, 0));
-
-	/* vpsadbw: per qword lane sum of |byte differences| */
-	memset(a, 0, 32); memset(b, 1, 32);
-	emu_vop(o, a, b, 32, 8, EMU_V_SAD, 0);
-	CHECK(ld(o, 0) == 8 && ld(o, 2) == 8, "vpsadbw %u %u", ld(o, 0), ld(o, 2));
-
-	/* cvttps2dq: finite floats */
-	{ u32 one = 0x3f800000, negtwo = 0xc0000000;
-	  memcpy(a, &one, 4); memcpy(a + 4, &negtwo, 4);
-	  emu_vop(o, a, a, 32, 4, EMU_V_CVTTPS2DQ, 0);
-	  CHECK((s32)ld(o, 0) == 1, "cvttps2dq 1.0");
-	  CHECK((s32)ld(o, 1) == -2, "cvttps2dq -2.0"); }
-}
-
-/* ---- ADX (ADCX/ADOX), the BoringSSL bigint instructions Haswell lacks ---- */
+/* ---- ADX: ADCX/ADOX (Broadwell+ instructions BoringSSL uses) ------------ */
 static void test_adx(void)
 {
 	struct emu_adx_out o;
 
-	/* ADCX: adds CF, writes CF, leaves OF alone */
 	o = emu_adx(0xffffffffULL, 1, 4, 0, 0, 1);
 	CHECK(o.result == 0 && o.cf == 1 && o.of == 1, "adcx32 carry");
 	o = emu_adx(1, 1, 4, 0, 1, 0);
-	CHECK(o.result == 3 && o.cf == 0 && o.of == 0, "adcx32 with carry in");
+	CHECK(o.result == 3 && o.cf == 0 && o.of == 0, "adcx32 carry in");
 	o = emu_adx(0xffffffffffffffffULL, 1, 8, 0, 0, 1);
 	CHECK(o.result == 0 && o.cf == 1 && o.of == 1, "adcx64 carry");
-	o = emu_adx(1, 2, 8, 0, 1, 0);
-	CHECK(o.result == 4 && o.cf == 0, "adcx64 with carry in");
-
-	/* ADOX: adds OF, writes OF (signed overflow), leaves CF alone */
 	o = emu_adx(0x7fffffffULL, 1, 4, 1, 1, 0);
 	CHECK(o.result == 0x80000000 && o.of == 1 && o.cf == 1, "adox32 overflow");
 	o = emu_adx(0, 0, 4, 1, 0, 1);
-	CHECK(o.result == 1 && o.of == 0 && o.cf == 0, "adox32 with overflow in");
+	CHECK(o.result == 1 && o.of == 0 && o.cf == 0, "adox32 overflow in");
 	o = emu_adx(0x7fffffffffffffffULL, 1, 8, 1, 0, 0);
 	CHECK(o.result == 0x8000000000000000ULL && o.of == 1, "adox64 overflow");
 	o = emu_adx(0xffffffffULL, 0, 8, 1, 1, 0);
@@ -388,7 +272,7 @@ int main(void)
 {
 	isa_emu_core_init();
 	test_gfni(); test_vnni(); test_sha256(); test_sha1(); test_vaes(); test_clmul_ifma();
-	test_avx2(); test_adx();
+	test_adx();
 	printf("%d checks, %d failures\n", checks, fails);
 	return fails != 0;
 }

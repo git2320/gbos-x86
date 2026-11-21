@@ -50,43 +50,8 @@ void emu_vpclmulqdq(u8 *dst, const u8 *a, const u8 *b, u8 imm, int len);
 /* Builds the AES tables; call once before emu_vaes(). */
 void isa_emu_core_init(void);
 
-/* ---- AVX/AVX2 baseline (pre-Haswell Intel: Sandy/Ivy Bridge) ------------
- * Scalar emulation of the VEX-encoded integer operations that bionic, the
- * dynamic linker and the C++ runtime use on the Haswell x86-64 baseline.
- * Vectors are little-endian byte arrays, `len` is 16 (xmm) or 32 (ymm).
- */
-enum emu_vop {
-	EMU_V_MOV, EMU_V_AND, EMU_V_OR, EMU_V_XOR, EMU_V_ANDN,
-	EMU_V_ADD, EMU_V_SUB, EMU_V_ADDS_S, EMU_V_ADDS_U, EMU_V_SUBS_S, EMU_V_SUBS_U,
-	EMU_V_EQ, EMU_V_GT, EMU_V_MIN_S, EMU_V_MAX_S, EMU_V_MIN_U, EMU_V_MAX_U,
-	EMU_V_SLL, EMU_V_SRL, EMU_V_SRA,
-	EMU_V_SHUFB, EMU_V_ALIGNR, EMU_V_UNPCKL, EMU_V_UNPCKH, EMU_V_PACKUS,
-	EMU_V_MUL, EMU_V_MULHI, EMU_V_MULADD, EMU_V_SAD, EMU_V_ABS, EMU_V_SIGN,
-	EMU_V_PERMQ, EMU_V_PERM2I128, EMU_V_PERMILPS, EMU_V_PERMILPD,
-	EMU_V_BLEND, EMU_V_BROADCAST, EMU_V_MOVSX, EMU_V_MOVZX, EMU_V_MOVMSK,
-	EMU_V_CVTTPS2DQ, EMU_V_CVTPS2DQ, EMU_V_CVTPD2PS,
-};
-/* a = destination/first source, b = second source, len = 16/32,
- * elem = element width in bytes, aux = immediate (shift count / imm8 / src size). */
-void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop op, int aux);
-/* Variable-count shifts: b holds the per-element counts. kind: 0=SLL, 1=SRL, 2=SRA. */
-void emu_vshift_var(u8 *dst, const u8 *a, const u8 *b, int len, int elem, int kind);
-/* Sign bits of the elements of a (one bit per element, 32-bit little-endian result in dst). */
-void emu_vmovmsk(u8 *dst, const u8 *a, int len, int elem);
-
-/* ---- Haswell-baseline GPR instructions (pre-Haswell Intel) --------------
- * `a` is the first source, `b` the second (used by ANDN/BEXTR), `ctrl` the
- * immediate or BEXTR control word. `width` is 4 or 8; results are masked to it.
- */
-enum emu_grop {
-	EMU_G_ANDN, EMU_G_BEXTR, EMU_G_BLSI, EMU_G_BLSMSK, EMU_G_BLSR,
-	EMU_G_BZHI, EMU_G_RORX, EMU_G_LZCNT, EMU_G_TZCNT, EMU_G_MOVBE,
-};
-u64 emu_grop(enum emu_grop op, u64 a, u64 b, u32 ctrl, int width);
-
-/* ADX: ADCX adds with CF, ADOX adds with OF; the other flag is left unchanged.
- * kind: 0 = ADCX, 1 = ADOX. cf/of are the incoming flags; out carries the flags
- * that the instruction writes (CF for ADCX, OF for ADOX). */
+/* ADX: ADCX adds with CF, ADOX adds with OF; the other flag is untouched.
+ * kind: 0 = ADCX, 1 = ADOX. cf/of are the incoming flags. */
 struct emu_adx_out { u64 result; int cf; int of; };
 struct emu_adx_out emu_adx(u64 a, u64 b, int width, int kind, int cf, int of);
 

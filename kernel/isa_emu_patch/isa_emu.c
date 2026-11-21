@@ -447,6 +447,12 @@ static void do_emulate(struct op *o, struct xregs_state *xs, const u8 *mem,
 		vreg_load(xs, o->dst, len, d);
 	}
 
+	if (o->is_avx && (o->velem <= 0 || o->len < o->velem || o->len < 16)) {
+		/* A bad decode must SIGILL the process, not divide-by-zero the kernel. */
+		pr_warn_ratelimited("isa_emu: BAD decode kind=%d vop=%d len=%d elem=%d aux=%d comm=%s\n",
+				    o->kind, (int)o->vop, o->len, o->velem, o->vaux, current->comm);
+		return;
+	}
 	if (o->is_avx) {
 		if (o->shift_var)
 			emu_vshift_var(d, a, b, len, o->velem, o->vaux);
@@ -805,6 +811,11 @@ bool isa_emu_handle_ud(struct pt_regs *regs)
 					return true;
 				}
 			}
+		}
+		if (o.is_avx && (o.velem <= 0 || o.len < o.velem || o.len < 16)) {
+			pr_warn_ratelimited("isa_emu: BAD decode vop=%d len=%d elem=%d aux=%d comm=%s\n",
+					    (int)o.vop, o.len, o.velem, o.vaux, current->comm);
+			return false;	/* let the normal #UD path SIGILL this process */
 		}
 		xs = fpu_emu_begin();
 		do_emulate(&o, xs, mem, regs, out);

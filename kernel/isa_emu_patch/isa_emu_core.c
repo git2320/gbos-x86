@@ -536,9 +536,19 @@ static void cvtpd2ps(u8 *dst, const u8 *a, int len)
 
 void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop op, int aux)
 {
-	int i, l, n = len / elem, lane = len / 16;
+	int i, l, n, lane;
+
+	/* Never divide by a zero element size: a bad decode must not panic the kernel. */
+	if (elem <= 0 || len < 16)
+		return;
+	n = len / elem;
+	lane = len / 16;
 
 	switch (op) {
+	case EMU_V_MOV:
+		/* Move is a raw vector copy; elem is irrelevant and may be len-sized. */
+		memcpy(dst, b, len);
+		return;
 	case EMU_V_BROADCAST:
 		/* The source is the r/m operand, which do_emulate() loads into b. */
 		for (i = 0; i < n; i++)
@@ -724,7 +734,11 @@ void emu_vop(u8 *dst, const u8 *a, const u8 *b, int len, int elem, enum emu_vop 
 
 void emu_vshift_var(u8 *dst, const u8 *a, const u8 *b, int len, int elem, int kind)
 {
-	int i, n = len / elem;
+	int i, n;
+
+	if (elem <= 0 || len < 16)
+		return;
+	n = len / elem;
 
 	for (i = 0; i < n; i++) {
 		u64 av = ldN(a + i * elem, elem), cnt = ldN(b + i * elem, elem);

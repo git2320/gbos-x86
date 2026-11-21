@@ -1,0 +1,91 @@
+name: Build and release gbOS86 kernel
+
+# Builds the kernel with the AOSP toolchain in a GitHub Actions runner and publishes
+# BOOTX64.EFI + the matching module trees as a downloadable release asset, so nobody
+# has to spend 30+ minutes and 7 GB of Docker volumes building it locally.
+#
+# Trigger: push a tag named kernel-* (e.g. git tag kernel-adx-1 && git push origin kernel-adx-1)
+#          or run this workflow manually from the Actions tab (optionally with a tag name).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (blank = auto: kernel-YYYYMMDD-<run>)'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'kernel-*'
+
+permissions:
+  contents: write
+
+jobs:
+  kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        run: |
+          # The kernel source volume needs ~7 GB; GitHub runners ship with large unused SDKs.
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          df -h .
+
+      - name: Build the kernel build image
+        run: docker build -t gbos-kbuild kernel/docker
+
+      - name: Fetch kernel source, AOSP clang and KernelSU (~2.5 GB)
+        run: sh kernel/fetch_kernel_sources.sh
+
+      - name: Build the kernel (BOOTX64.EFI + modules)
+        run: sh kernel/build_kernel.sh
+
+      - name: Verify the image boots in QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 >/dev/null
+          python3 kernel/isa_emu_test/run_qemu.py usb/out/BOOTX64.EFI
+        continue-on-error: true   # informational: QEMU is TCG here and much slower than hardware
+
+      - name: Package the release asset
+        id: package
+        run: |
+          set -e
+          TAG="${{ inputs.tag }}"
+          [ -n "$TAG" ] || TAG="kernel-$(date +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          REL=$(basename "$(find usb/modules/lib/modules -mindepth 1 -maxdepth 1 -type d | head -1)")
+          echo "kernel release: $REL"
+          NAME="gbos86-kernel-$TAG"
+          mkdir -p "$NAME"
+          cp usb/out/BOOTX64.EFI "$NAME/"
+          cp -a usb/modules "$NAME/"
+          cp -a usb/kmod "$NAME/"
+          printf 'gbOS86 prebuilt kernel\nrelease: %s\ntag: %s\nbuilt from: %s\n' \
+                 "$REL" "$TAG" "$GITHUB_SHA" > "$NAME/README.txt"
+          tar -cJf "$NAME.tar.xz" "$NAME"
+          sha256sum "$NAME.tar.xz" > "$NAME.tar.xz.sha256"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=$NAME.tar.xz" >> "$GITHUB_OUTPUT"
+          ls -lh "$NAME.tar.xz"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${{ steps.package.outputs.tag }}"
+          ASSET="${{ steps.package.outputs.asset }}"
+          gh release create "$TAG" "$ASSET" "$ASSET.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "gbOS86 prebuilt kernel ($TAG)" \
+            --notes "Prebuilt kernel built by GitHub Actions from commit $GITHUB_SHA.
+          
+          Install: extract the archive, copy BOOTX64.EFI to the stick's EFI/BOOT/BOOTX64.EFI,
+          replace gbos/modules with the archive's modules/, then boot the stick and choose 1 (Update).
+          The modules tree must match the kernel release printed in the asset's README.txt.
+          Boot logs: gbos/logs/boot-N/ on the stick."

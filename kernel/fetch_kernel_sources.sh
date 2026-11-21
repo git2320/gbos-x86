@@ -14,7 +14,11 @@ ROOT=$(pwd)
 VOL=gbos-ksrc
 KSRC_COMMIT=3938c8d97142d5cf31543aa96f864a2cf832dda0   # AOSP kernel/common android17-6.18
 KSRC_TAR=kernel-common-$KSRC_COMMIT.tar.gz
-KSRC_SHA=d078c2db2db1d2e47d74c59a31a5020774814655bfbe20bbb2286b9e430495c9
+# +archive/<commit>.tar.gz is generated on the fly by gitiles: its bytes change between
+# downloads even for the same commit (gzip/tar metadata). If this pin mismatches, verify the
+# tarball with `tar -tzf`, check `tar -xzOf <file> Makefile | head` reports 6.18.21, then
+# update this value to the sha256 printed in the error. Do not accept a corrupt archive.
+KSRC_SHA=3eb425501acd744021fc0f10552a7b286518190538c4518362279d550a5c6ee7
 CLANG_TAG=android-17.0.0_r1        # AOSP prebuilts/clang/host/linux-x86
 CLANG_DIR=clang-r584948c           # must match C= in kernel/build_kernel.sh and kernel/isa_emu_patch/*.sh
 KSU_TAG=v3.3.1

@@ -814,3 +814,29 @@ u64 emu_grop(enum emu_grop op, u64 a, u64 b, u32 ctrl, int width)
 	}
 	return r & mask;
 }
+
+/* ---- ADX (ADCX/ADOX): BoringSSL bigint on Broadwell+ binaries ----------- */
+struct emu_adx_out emu_adx(u64 a, u64 b, int width, int kind, int cf, int of)
+{
+	u64 mask = width == 8 ? ~0ULL : 0xffffffffULL;
+	u64 sa = a & mask, sb = b & mask;
+	unsigned __int128 wide;
+	u64 res, sign = 1ULL << (width * 8 - 1);
+	struct emu_adx_out out;
+
+	wide = (unsigned __int128)sa + sb + (u64)(kind ? of : cf);
+	res = (u64)wide & mask;
+	out.result = res;
+	if (kind == 0) {
+		out.cf = (int)(wide >> (width * 8));
+		out.of = of;			/* ADOX's flag, untouched by ADCX */
+	} else {
+		s64 x = (s64)(sa << (64 - width * 8)) >> (64 - width * 8);
+		s64 y = (s64)(sb << (64 - width * 8)) >> (64 - width * 8);
+		s64 z = (s64)(res << (64 - width * 8)) >> (64 - width * 8);
+
+		out.cf = cf;			/* ADCX's flag, untouched by ADOX */
+		out.of = ((x ^ z) & (y ^ z) & (s64)sign) != 0;
+	}
+	return out;
+}

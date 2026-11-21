@@ -84,6 +84,12 @@ enum emu_grop {
 };
 u64 emu_grop(enum emu_grop op, u64 a, u64 b, u32 ctrl, int width);
 
+/* ADX: ADCX adds with CF, ADOX adds with OF; the other flag is left unchanged.
+ * kind: 0 = ADCX, 1 = ADOX. cf/of are the incoming flags; out carries the flags
+ * that the instruction writes (CF for ADCX, OF for ADOX). */
+struct emu_adx_out { u64 result; int cf; int of; };
+struct emu_adx_out emu_adx(u64 a, u64 b, int width, int kind, int cf, int of);
+
 /* SHA-NI. All operate on 128-bit values; `dst` is also the first source. */
 void emu_sha1rnds4(u8 *dst, const u8 *src, u8 imm);
 void emu_sha1nexte(u8 *dst, const u8 *src);

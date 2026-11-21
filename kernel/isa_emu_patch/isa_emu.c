@@ -111,7 +111,7 @@ static void gpr_write(struct pt_regs *regs, int n, u64 v)
 /* Haswell-baseline scalar instructions a Sandy/Ivy Bridge CPU lacks. */
 enum gpr_kind {
 	G_ANDN, G_BEXTR, G_BLSI, G_BLSMSK, G_BLSR, G_BZHI, G_RORX,
-	G_LZCNT, G_TZCNT, G_MOVBE,
+	G_LZCNT, G_TZCNT, G_MOVBE, G_ADCX, G_ADOX,
 };
 struct gop {
 	enum gpr_kind kind;
@@ -586,7 +586,7 @@ static bool classify_gpr(struct insn *insn, struct gop *g)
 {
 	int reg = X86_MODRM_REG(insn->modrm.value), rm = X86_MODRM_RM(insn->modrm.value);
 	int sub = reg, m = 0, pp = 0, w = 0, vv = 0, opc, i;
-	bool vex = insn->vex_prefix.nbytes > 0, f3 = false;
+	bool vex = insn->vex_prefix.nbytes > 0, f3 = false, f2 = false, p66 = false;
 
 	memset(g, 0, sizeof(*g));
 	g->vex = vex;
@@ -635,14 +635,21 @@ static bool classify_gpr(struct insn *insn, struct gop *g)
 		return false;
 	}
 
-	for (i = 0; i < insn->prefixes.nbytes; i++)
+	for (i = 0; i < insn->prefixes.nbytes; i++) {
 		if (insn->prefixes.bytes[i] == 0xf3)
 			f3 = true;
+		else if (insn->prefixes.bytes[i] == 0xf2)
+			f2 = true;
+		else if (insn->prefixes.bytes[i] == 0x66)
+			p66 = true;
+	}
 	if (insn->rex_prefix.nbytes) {
 		if (X86_REX_R(insn->rex_prefix.value))
 			reg += 8;
 		if (X86_REX_B(insn->rex_prefix.value))
 			rm += 8;
+		if (X86_REX_W(insn->rex_prefix.value))
+			g->width = 8;
 	}
 	g->dst = reg;
 	g->src2 = rm;
@@ -660,6 +667,11 @@ static bool classify_gpr(struct insn *insn, struct gop *g)
 			g->kind = G_MOVBE;
 			g->store = opc == 0xf1;
 			return true;
+		}
+		/* ADCX: 66 0F 38 F6 /r ; ADOX: F3 0F 38 F6 /r (ADX, Broadwell+) */
+		if (opc == 0xf6 && !f2) {
+			if (p66) { g->kind = G_ADCX; return true; }
+			if (f3)  { g->kind = G_ADOX; return true; }
 		}
 	}
 	return false;
@@ -693,6 +705,7 @@ static void do_gpr(struct gop *g, struct pt_regs *regs, const u8 *mem, void __us
 	case G_LZCNT:  op = EMU_G_LZCNT;  break;
 	case G_TZCNT:  op = EMU_G_TZCNT;  break;
 	case G_MOVBE:  op = EMU_G_MOVBE;  break;
+	case G_ADCX: case G_ADOX: op = EMU_G_ANDN; break; /* handled below */
 	default: return;
 	}
 
@@ -703,6 +716,22 @@ static void do_gpr(struct gop *g, struct pt_regs *regs, const u8 *mem, void __us
 		a = gpr_ld(mem, g->width);
 	else
 		a = gpr_read(regs, g->src2);
+
+	/* ADCX/ADOX: DEST = DEST + r/m + CF (or OF); only that flag is written. */
+	if (g->kind == G_ADCX || g->kind == G_ADOX) {
+		u64 dest = gpr_read(regs, g->dst);
+		int cf = !!(regs->flags & (1UL << 0));	/* X86_EFLAGS_CF */
+		int of = !!(regs->flags & (1UL << 11));	/* X86_EFLAGS_OF */
+		struct emu_adx_out out = emu_adx(dest, a, g->width,
+						 g->kind == G_ADCX ? 0 : 1, cf, of);
+
+		gpr_write(regs, g->dst, out.result);
+		if (g->kind == G_ADCX)
+			regs->flags = (regs->flags & ~(1UL << 0)) | (out.cf ? (1UL << 0) : 0);
+		else
+			regs->flags = (regs->flags & ~(1UL << 11)) | (out.of ? (1UL << 11) : 0);
+		return;
+	}
 
 	r = emu_grop(op, a, b, ctrl, g->width);
 	if (g->store) {

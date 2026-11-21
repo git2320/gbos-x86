@@ -358,11 +358,37 @@ static void test_avx2(void)
 	  CHECK((s32)ld(o, 1) == -2, "cvttps2dq -2.0"); }
 }
 
+/* ---- ADX (ADCX/ADOX), the BoringSSL bigint instructions Haswell lacks ---- */
+static void test_adx(void)
+{
+	struct emu_adx_out o;
+
+	/* ADCX: adds CF, writes CF, leaves OF alone */
+	o = emu_adx(0xffffffffULL, 1, 4, 0, 0, 1);
+	CHECK(o.result == 0 && o.cf == 1 && o.of == 1, "adcx32 carry");
+	o = emu_adx(1, 1, 4, 0, 1, 0);
+	CHECK(o.result == 3 && o.cf == 0 && o.of == 0, "adcx32 with carry in");
+	o = emu_adx(0xffffffffffffffffULL, 1, 8, 0, 0, 1);
+	CHECK(o.result == 0 && o.cf == 1 && o.of == 1, "adcx64 carry");
+	o = emu_adx(1, 2, 8, 0, 1, 0);
+	CHECK(o.result == 4 && o.cf == 0, "adcx64 with carry in");
+
+	/* ADOX: adds OF, writes OF (signed overflow), leaves CF alone */
+	o = emu_adx(0x7fffffffULL, 1, 4, 1, 1, 0);
+	CHECK(o.result == 0x80000000 && o.of == 1 && o.cf == 1, "adox32 overflow");
+	o = emu_adx(0, 0, 4, 1, 0, 1);
+	CHECK(o.result == 1 && o.of == 0 && o.cf == 0, "adox32 with overflow in");
+	o = emu_adx(0x7fffffffffffffffULL, 1, 8, 1, 0, 0);
+	CHECK(o.result == 0x8000000000000000ULL && o.of == 1, "adox64 overflow");
+	o = emu_adx(0xffffffffULL, 0, 8, 1, 1, 0);
+	CHECK(o.result == 0xffffffff && o.of == 0 && o.cf == 1, "adox64 keeps CF");
+}
+
 int main(void)
 {
 	isa_emu_core_init();
 	test_gfni(); test_vnni(); test_sha256(); test_sha1(); test_vaes(); test_clmul_ifma();
-	test_avx2();
+	test_avx2(); test_adx();
 	printf("%d checks, %d failures\n", checks, fails);
 	return fails != 0;
 }

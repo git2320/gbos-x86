@@ -273,6 +273,8 @@ static bool classify(struct insn *insn, struct op *o)
 	int i, reg, rm, vv = 0, w = 0, l = 0;
 
 	memset(o, 0, sizeof(*o));
+	/* -1 means "no GPR destination"; 0 is a valid GPR (RAX) for vpmovmsk. */
+	o->dst_gpr = -1;
 	modrm = insn->modrm.value;
 	reg = X86_MODRM_REG(modrm);
 	rm = X86_MODRM_RM(modrm);

@@ -950,6 +950,9 @@ fi
 mount --bind /tmp/empty.rc /new/vendor/etc/init/hal_desktop_charge_control_default.rc 2>/dev/null && log "hook: charge_control disabled"
 mount --bind /tmp/empty.rc /new/vendor/etc/init/suspend_notification_service.rc 2>/dev/null && log "hook: suspend_notification disabled"
 mount --bind /tmp/empty.rc /new/vendor/etc/init/suspend_diagnostics.rc 2>/dev/null && log "hook: suspend_diagnostics disabled"
+# odsign verifies the on-device signed apex keys with BoringSSL RSA; on pre-ADX CPUs the
+# emulated bigint is too slow and it never finishes, which blocks zygote. Skip it.
+mount --bind /tmp/empty.rc /new/system/etc/init/odsign.rc 2>/dev/null && log "hook: odsign disabled"
 log "hook: kvm: $(ls /sys/class/misc | grep -E 'kvm|vhost' | tr '\n' ' ')"
 
 # KVM trace -> kvmtrace.txt: guest exceptions / failed emulation / triple faults, to see why the

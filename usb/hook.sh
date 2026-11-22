@@ -954,9 +954,12 @@ mount --bind /tmp/empty.rc /new/vendor/etc/init/suspend_diagnostics.rc 2>/dev/nu
 # emulated bigint is too slow and it never finishes, which blocks zygote. Replace it with
 # an instant-success stub so init's "start odsign" completes normally.
 if [ -x /new/system/bin/odsign ]; then
-  mkdir -p /tmp/fakeod && mount -t tmpfs -o context=u:object_r:system_file:s0 tmpfs /tmp/fakeod &&
-    printf '#!/system/bin/sh\nexit 0\n' > /tmp/fakeod/odsign && chmod 755 /tmp/fakeod/odsign &&
-    mount --bind /tmp/fakeod/odsign /new/system/bin/odsign && log "hook: odsign stubbed" || log "hook: odsign stub FAILED"
+  # Use a real system binary so the SELinux label and domain transition stay valid.
+  for c in getprop log date; do
+    if [ -x /new/system/bin/$c ]; then
+      mount --bind /new/system/bin/$c /new/system/bin/odsign && log "hook: odsign replaced by $c" && break
+    fi
+  done
 else
   log "hook: odsign binary not found at /new/system/bin/odsign"
 fi

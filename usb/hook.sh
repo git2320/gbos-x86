@@ -951,11 +951,13 @@ mount --bind /tmp/empty.rc /new/vendor/etc/init/hal_desktop_charge_control_defau
 mount --bind /tmp/empty.rc /new/vendor/etc/init/suspend_notification_service.rc 2>/dev/null && log "hook: suspend_notification disabled"
 mount --bind /tmp/empty.rc /new/vendor/etc/init/suspend_diagnostics.rc 2>/dev/null && log "hook: suspend_diagnostics disabled"
 # odsign verifies the on-device signed apex keys with BoringSSL RSA; on pre-ADX CPUs the
-# emulated bigint is too slow and it never finishes, which blocks zygote. Skip it.
-if [ -f /new/system/etc/init/odsign.rc ]; then
-  mount --bind /tmp/empty.rc /new/system/etc/init/odsign.rc && log "hook: odsign disabled" || log "hook: odsign bind FAILED"
+# emulated bigint is too slow and it never finishes, which blocks zygote. Replace it with
+# an instant-success stub so init's "start odsign" completes normally.
+if [ -x /new/system/bin/odsign ]; then
+  printf '#!/system/bin/sh\nexit 0\n' > /tmp/fake_odsign && chmod 755 /tmp/fake_odsign &&
+    mount --bind /tmp/fake_odsign /new/system/bin/odsign && log "hook: odsign stubbed" || log "hook: odsign stub FAILED"
 else
-  log "hook: odsign rc not found at /new/system/etc/init/odsign.rc"
+  log "hook: odsign binary not found at /new/system/bin/odsign"
 fi
 log "hook: kvm: $(ls /sys/class/misc | grep -E 'kvm|vhost' | tr '\n' ' ')"
 

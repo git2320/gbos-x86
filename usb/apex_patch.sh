@@ -3,6 +3,21 @@
 # over every APEX copy that is byte-identical to the Conscrypt one. Mounts go into init's (default) namespace.
 # The "apex" lines of patched/MANIFEST (tools/port_build.py) give the path inside an APEX, the sha256 of the original
 # and the patched file; a copy with any other hash is left alone and logged, so a new Google build shows up here.
+# Optional pure-C BoringSSL for every APEX copy of libcrypto (including the
+# tethering libcrypto_httpengine.so), enabled with NOASM_BSSL=1 in gbos.cfg.
+if [ -f /postinstall/gbos/patched/noasm.libcrypto.so ]; then
+  for d in /apex/*; do
+    case $d in *@*) continue;; esac
+    for rel in lib64/libcrypto.so lib64/libcrypto_httpengine.so; do
+      f=$d/$rel
+      [ -f $f ] || continue
+      mount -o bind /postinstall/gbos/patched/noasm.libcrypto.so $f && \
+        log -t gbos "apex_patch: noasm BoringSSL -> $f" || \
+        log -t gbos "apex_patch: noasm bind FAILED $f"
+    done
+  done
+fi
+
 M=/postinstall/gbos/patched/MANIFEST
 [ -f $M ] || { log -t gbos "apex_patch: $M missing"; exit 0; }
 while read -r kind rel want file rest; do

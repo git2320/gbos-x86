@@ -26,6 +26,15 @@ if [ -f "$G/gbos.cfg" ] && grep -q '^MODE=live' "$G/gbos.cfg" 2>/dev/null; then
   sync 2>/dev/null || true
 fi
 
+# Optional pure-C BoringSSL (built with OPENSSL_NO_ASM=ON): no ADX/AVX/SHA-NI at all.
+# Needed on Haswell and older, where Google's libcrypto uses ADX bigint that the
+# kernel emulator cannot run fast enough for RSA keygen/odsign.
+if [ "${NOASM_BSSL:-0}" = 1 ] && [ -f $G/patched/noasm.libcrypto.so ]; then
+  for t in /new/system/lib64/libcrypto.so /new/vendor/lib64/libcrypto.so; do
+    [ -f "$t" ] && mount --bind $G/patched/noasm.libcrypto.so "$t" && log "hook: noasm BoringSSL -> $t"
+  done
+fi
+
 # Library patches. patched/MANIFEST (written by tools/port_build.py) has one line per patch: kind, the path in the Android root
 # (/new/...), the sha256 of the exact original the patch was made from, and the patched file (relative to gbos/). A patch is
 # bound only over a file with that hash, so a new Google build never gets a stale patch: the line says "NOT patched" and shows

@@ -428,12 +428,13 @@ static bool classify_adx(struct insn *insn, struct gop *g, struct pt_regs *regs)
 	return true;
 }
 
-static void do_adx(struct gop *g, struct pt_regs *regs, const u8 *mem)
+static void do_adx(struct gop *g, struct pt_regs *regs, const u8 *mem, const u8 *insn_bytes)
 {
-	u64 a, mask = g->width == 8 ? ~0ULL : 0xffffffffULL;
+	u64 a, d, mask = g->width == 8 ? ~0ULL : 0xffffffffULL;
 	int cf = !!(regs->flags & (1UL << 0));	/* X86_EFLAGS_CF */
 	int of = !!(regs->flags & (1UL << 11));	/* X86_EFLAGS_OF */
 	struct emu_adx_out out;
+	static int dbg = 48;
 	int i;
 
 	if (g->mem_addr) {
@@ -443,8 +444,16 @@ static void do_adx(struct gop *g, struct pt_regs *regs, const u8 *mem)
 	} else {
 		a = gpr_read(regs, g->src);
 	}
-	out = emu_adx(gpr_read(regs, g->dst), a, g->width,
-		      g->kind == G_ADCX ? 0 : 1, cf, of);
+	d = gpr_read(regs, g->dst);
+	out = emu_adx(d, a, g->width, g->kind == G_ADCX ? 0 : 1, cf, of);
+	if (dbg > 0) {
+		dbg--;
+		pr_info("isa_emu: ADX %s dst=%d src=%d w=%d bytes=%02x %02x %02x %02x %02x a=%016llx d=%016llx cf=%d of=%d -> %016llx ncf=%d nof=%d\n",
+			g->kind == G_ADCX ? "adcX" : "adoX", g->dst, g->src, g->width,
+			insn_bytes[0], insn_bytes[1], insn_bytes[2], insn_bytes[3], insn_bytes[4],
+			(unsigned long long)a, (unsigned long long)d, cf, of,
+			(unsigned long long)out.result, out.cf, out.of);
+	}
 	gpr_write(regs, g->dst, out.result & mask);
 	if (g->kind == G_ADCX)
 		regs->flags = (regs->flags & ~(1UL << 0)) | (out.cf ? (1UL << 0) : 0);
@@ -476,9 +485,9 @@ bool isa_emu_handle_ud(struct pt_regs *regs)
 				force_sig_fault(SIGSEGV, SEGV_MAPERR, g.mem_addr);
 				return true;
 			}
-			do_adx(&g, regs, mem);
+			do_adx(&g, regs, mem, buf);
 		} else {
-			do_adx(&g, regs, NULL);
+			do_adx(&g, regs, NULL, buf);
 		}
 		regs->ip += insn.length;
 		return true;

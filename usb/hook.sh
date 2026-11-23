@@ -33,6 +33,13 @@ if [ "${NOASM_BSSL:-0}" = 1 ] && [ -f $G/patched/noasm.libcrypto.so ]; then
   for t in /new/system/lib64/libcrypto.so /new/vendor/lib64/libcrypto.so; do
     [ -f "$t" ] && mount --bind $G/patched/noasm.libcrypto.so "$t" && log "hook: noasm BoringSSL -> $t"
   done
+  # Google's libssl.so needs KYBER/refcount symbols our libcrypto lacks; bind our
+  # matching libssl.so too (built from the same BoringSSL source).
+  if [ -f $G/patched/noasm.libssl.so ]; then
+    for t in /new/system/lib64/libssl.so /new/vendor/lib64/libssl.so; do
+      [ -f "$t" ] && mount --bind $G/patched/noasm.libssl.so "$t" && log "hook: noasm libssl -> $t"
+    done
+  fi
 fi
 
 # Library patches. patched/MANIFEST (written by tools/port_build.py) has one line per patch: kind, the path in the Android root

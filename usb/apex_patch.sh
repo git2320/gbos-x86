@@ -15,6 +15,12 @@ if [ -f /postinstall/gbos/patched/noasm.libcrypto.so ]; then
         log -t gbos "apex_patch: noasm BoringSSL -> $f" || \
         log -t gbos "apex_patch: noasm bind FAILED $f"
     done
+    # Matching libssl.so: Google's libssl needs KYBER symbols ours lacks.
+    if [ -f /postinstall/gbos/patched/noasm.libssl.so ]; then
+      f=$d/lib64/libssl.so
+      [ -f $f ] && mount -o bind /postinstall/gbos/patched/noasm.libssl.so $f && \
+        log -t gbos "apex_patch: noasm libssl -> $f"
+    fi
   done
 fi
 

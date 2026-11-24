@@ -963,6 +963,12 @@ if [ -f $G/audio/gbos-hda-pch/audio_config.xml ]; then
 fi
 # apgetty (UART shell) has no UART configured here and crash-loops
 : > /tmp/empty.rc && mount --bind /tmp/empty.rc /new/system_ext/etc/init/apgetty.rc && log "hook: apgetty disabled"
+# BoringSSL self-tests verify Google's libcrypto hash; our noasm libcrypto has a
+# different hash so they fail and trigger reboot_on_failure. Disable them when active.
+if [ "${NOASM_BSSL:-0}" = 1 ]; then
+  mount --bind /tmp/empty.rc /new/vendor/etc/init/boringssl_self_test.rc 2>/dev/null && log "hook: vendor boringssl self-test disabled"
+  mount --bind /tmp/empty.rc /new/system/etc/init/hw/init.boringssl.zygote64.rc 2>/dev/null && log "hook: system boringssl self-test disabled"
+fi
 mount --bind /tmp/empty.rc /new/vendor/etc/init/hal_desktop_charge_control_default.rc 2>/dev/null && log "hook: charge_control disabled"
 mount --bind /tmp/empty.rc /new/vendor/etc/init/suspend_notification_service.rc 2>/dev/null && log "hook: suspend_notification disabled"
 mount --bind /tmp/empty.rc /new/vendor/etc/init/suspend_diagnostics.rc 2>/dev/null && log "hook: suspend_diagnostics disabled"

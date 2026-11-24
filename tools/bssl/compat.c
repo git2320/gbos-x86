@@ -32,6 +32,21 @@ EXPORT uint8_t *SHA512_256(const uint8_t *data, size_t len, uint8_t *out);
 EXPORT int BORINGSSL_integrity_test(void);
 EXPORT const uint8_t *FIPS_module_hash(void);
 EXPORT void RAND_maybe_reseed(void);
+EXPORT void HMAC_CTX_init(void *ctx);
+EXPORT void HMAC_CTX_cleanup(void *ctx);
+EXPORT void *HMAC_CTX_new(void);
+EXPORT void HMAC_CTX_free(void *ctx);
+EXPORT void HMAC_CTX_cleanse(void *ctx);
+EXPORT int HMAC_Init_ex(void *ctx, const void *key, size_t key_len,
+                        const void *md, void *impl);
+EXPORT int HMAC_Update(void *ctx, const uint8_t *data, size_t len);
+EXPORT int HMAC_Final(void *ctx, uint8_t *out, unsigned int *out_len);
+EXPORT size_t HMAC_size(const void *ctx);
+EXPORT const void *HMAC_CTX_get_md(const void *ctx);
+EXPORT int HMAC_CTX_copy_ex(void *dst, const void *src);
+EXPORT void HMAC_CTX_reset(void *ctx);
+EXPORT int HMAC_Init(void *ctx, const void *key, int key_len, const void *md);
+EXPORT int HMAC_CTX_copy(void *dst, const void *src);
 
 /* Each returns the destination buffer, matching the legacy AOSP signature. */
 static uint8_t *digest_one_shot(const EVP_MD *md, const uint8_t *data,
@@ -102,4 +117,128 @@ EXPORT const uint8_t *FIPS_module_hash(void)
 EXPORT void RAND_maybe_reseed(void)
 {
     /* Nothing to do: the DRBG reseeds itself. */
+}
+
+/*
+ * ABI shims for the legacy stack-based HMAC_CTX API.
+ *
+ * Google's BoringSSL has a 704-byte HMAC_CTX; ours is 800 bytes. Android
+ * libraries (e.g. libkeymaster_portable.so) stack-allocate the old size and
+ * call HMAC_CTX_init, so our functions would write past the buffer and trip
+ * -fstack-protector. Internally, BoringSSL's stack HMAC functions were renamed
+ * to bssl_real_* (see hmac.cc.inc); these shims allocate a real heap context
+ * and stash the pointer in the caller's buffer instead.
+ */
+struct hmac_shim { void *real; };
+
+/* The real (renamed) implementations inside libcrypto. */
+extern void bssl_real_HMAC_CTX_init(void *ctx);
+extern void bssl_real_HMAC_CTX_cleanup(void *ctx);
+extern void bssl_real_HMAC_CTX_cleanse(void *ctx);
+extern int bssl_real_HMAC_Init_ex(void *ctx, const void *key, size_t key_len,
+                                  const void *md, void *impl);
+extern int bssl_real_HMAC_Update(void *ctx, const uint8_t *data, size_t len);
+extern int bssl_real_HMAC_Final(void *ctx, uint8_t *out, unsigned int *out_len);
+extern void *bssl_real_HMAC_CTX_new(void);
+extern void bssl_real_HMAC_CTX_free(void *ctx);
+extern size_t bssl_real_HMAC_size(const void *ctx);
+extern const void *bssl_real_HMAC_CTX_get_md(const void *ctx);
+extern int bssl_real_HMAC_CTX_copy_ex(void *dst, const void *src);
+extern void bssl_real_HMAC_CTX_reset(void *ctx);
+extern int bssl_real_HMAC_Init(void *ctx, const void *key, int key_len,
+                               const void *md);
+extern int bssl_real_HMAC_CTX_copy(void *dst, const void *src);
+
+static void *hmac_shim_real(void *ctx)
+{
+    return ctx ? ((struct hmac_shim *)ctx)->real : NULL;
+}
+
+EXPORT void HMAC_CTX_init(void *ctx)
+{
+    ((struct hmac_shim *)ctx)->real = bssl_real_HMAC_CTX_new();
+}
+
+EXPORT void HMAC_CTX_cleanup(void *ctx)
+{
+    void *real = hmac_shim_real(ctx);
+    if (real) {
+        bssl_real_HMAC_CTX_free(real);
+        ((struct hmac_shim *)ctx)->real = NULL;
+    }
+}
+
+EXPORT void *HMAC_CTX_new(void)
+{
+    struct hmac_shim *s = malloc(sizeof(*s));
+    if (s)
+        s->real = bssl_real_HMAC_CTX_new();
+    if (s && !s->real) { free(s); s = NULL; }
+    return s;
+}
+
+EXPORT void HMAC_CTX_free(void *ctx)
+{
+    if (!ctx) return;
+    bssl_real_HMAC_CTX_free(hmac_shim_real(ctx));
+    free(ctx);
+}
+
+EXPORT void HMAC_CTX_cleanse(void *ctx)
+{
+    void *real = hmac_shim_real(ctx);
+    if (real)
+        bssl_real_HMAC_CTX_cleanse(real);
+}
+
+EXPORT int HMAC_Init_ex(void *ctx, const void *key, size_t key_len,
+                        const void *md, void *impl)
+{
+    void *real = hmac_shim_real(ctx);
+    return bssl_real_HMAC_Init_ex(real, key, key_len, md, impl);
+}
+
+EXPORT int HMAC_Update(void *ctx, const uint8_t *data, size_t len)
+{
+    return bssl_real_HMAC_Update(hmac_shim_real(ctx), data, len);
+}
+
+EXPORT int HMAC_Final(void *ctx, uint8_t *out, unsigned int *out_len)
+{
+    return bssl_real_HMAC_Final(hmac_shim_real(ctx), out, out_len);
+}
+
+EXPORT size_t HMAC_size(const void *ctx)
+{
+    return bssl_real_HMAC_size(hmac_shim_real((void *)ctx));
+}
+
+EXPORT const void *HMAC_CTX_get_md(const void *ctx)
+{
+    return bssl_real_HMAC_CTX_get_md(hmac_shim_real((void *)ctx));
+}
+
+EXPORT int HMAC_CTX_copy_ex(void *dst, const void *src)
+{
+    void *s = hmac_shim_real((void *)src);
+    void *d = hmac_shim_real(dst);
+    if (!d) { HMAC_CTX_init(dst); d = hmac_shim_real(dst); }
+    return bssl_real_HMAC_CTX_copy_ex(d, s);
+}
+
+EXPORT void HMAC_CTX_reset(void *ctx)
+{
+    bssl_real_HMAC_CTX_reset(hmac_shim_real(ctx));
+}
+
+EXPORT int HMAC_Init(void *ctx, const void *key, int key_len, const void *md)
+{
+    return bssl_real_HMAC_Init(hmac_shim_real(ctx), key, key_len, md);
+}
+
+EXPORT int HMAC_CTX_copy(void *dst, const void *src)
+{
+    void *s = hmac_shim_real((void *)src);
+    if (!hmac_shim_real(dst)) HMAC_CTX_init(dst);
+    return bssl_real_HMAC_CTX_copy(hmac_shim_real(dst), s);
 }
